@@ -1,37 +1,28 @@
 # SPRECORDER
 
-Notre application SPRECORDER pour macOS / TrueNAS, basée sur le moteur original ChanTrail pour le relay HLS/Stripchat.
+SPRECORDER is the custom web application built around the original ChanTrail Stripchat Recorder engine.
 
-## Fonctions
+## Features
+- Monitoring section with multiple models
+- Stripchat profile images and live/offline status
+- Independent live monitoring
+- Manual recording to MP4
+- Separate Auto Record section
+- Automatic start when a model goes online
+- Automatic stop and MP4 finalization when a model goes offline
+- Persistent model/config/recording/log data on TrueNAS
 
-- Monitoring de plusieurs modèles.
-- Statut Online / Offline.
-- Photo de profil Stripchat.
-- Lecteur indépendant par modèle.
-- Enregistrement manuel.
-- Liste séparée « Enregistrement automatique ».
-- Démarrage automatique quand un modèle passe Online.
-- Arrêt automatique et finalisation MP4 quand il repasse Offline.
-- Enregistrement sans transcodage (`-c copy`).
+## Docker
+The image is published automatically to GitHub Container Registry:
 
-## TrueNAS
+`ghcr.io/salides/sprecorder:latest`
 
-Le conteneur expose :
+The container exposes:
+- `8080` = SPRECORDER web interface
+- `3030` = original ChanTrail relay/backend
 
-- `8080` : interface SPRECORDER.
-- `3030` : backend ChanTrail / relay.
-
-Les données persistantes sont montées depuis `/mnt/services/SPRECORDER/`.
-
-## Important
-
-Le code du moteur ChanTrail n'est pas copié dans ce dépôt : le Dockerfile le récupère depuis le dépôt officiel au moment du build. Le dépôt officiel est GPL-3.0.
-
-## Build local
-
-```bash
-docker compose build
-docker compose up -d
-```
-
-Puis ouvrir `http://IP_DU_SERVEUR:8080`.
+Persistent TrueNAS paths:
+- `/mnt/services/SPRECORDER/config` -> `/data/config`
+- `/mnt/services/SPRECORDER/recordings` -> `/data/recordings`
+- `/mnt/services/SPRECORDER/modules` -> `/data/modules`
+- `/mnt/services/SPRECORDER/logs` -> `/data/logs`
