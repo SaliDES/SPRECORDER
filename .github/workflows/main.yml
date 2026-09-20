@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: sprecorder
 
 jobs:
   build-and-push:
@@ -25,7 +25,7 @@ jobs:
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -38,5 +38,5 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/sprecorder:latest
-            ghcr.io/${{ github.repository_owner }}/sprecorder:${{ github.sha }}
+            ghcr.io/salides/sprecorder:latest
+            ghcr.io/salides/sprecorder:${{ github.sha }}
