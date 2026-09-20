@@ -1,0 +1,20 @@
+services:
+  sprecorder:
+    build: .
+    image: sprecorder:latest
+    container_name: sprecorder
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Paris
+      SPREC_HOST: 0.0.0.0
+      SPREC_PORT: "8080"
+      SPREC_BACKEND: http://127.0.0.1:3030
+      SPREC_DATA_DIR: /data
+    ports:
+      - "8080:8080"
+      - "3030:3030"
+    volumes:
+      - /mnt/services/SPRECORDER/config:/data/config
+      - /mnt/services/SPRECORDER/recordings:/data/recordings
+      - /mnt/services/SPRECORDER/modules:/data/modules
+      - /mnt/services/SPRECORDER/logs:/data/logs
