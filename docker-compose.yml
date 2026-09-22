@@ -1,17 +1,33 @@
 services:
+  chantrail:
+    image: chantrail/stripchat-recorder:latest
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Paris
+      LANGUAGE: en-US
+      PORT: "3030"
+    ports:
+      - "3030:3030"
+    volumes:
+      - /mnt/services/SPRECORDER/config:/app/stripchat-recorder/config
+      - /mnt/services/SPRECORDER/recordings:/app/stripchat-recorder/recordings
+      - /mnt/services/SPRECORDER/modules:/app/stripchat-recorder/modules
+      - /mnt/services/SPRECORDER/logs:/app/stripchat-recorder/logs
+
   sprecorder:
     build:
       context: .
       platforms:
         - linux/amd64
-    image: sprecorder:robust
-    container_name: sprecorder
+    image: ghcr.io/salides/sprecorder-ui:latest
     restart: unless-stopped
+    depends_on:
+      - chantrail
     environment:
       TZ: Europe/Paris
       SPREC_HOST: 0.0.0.0
       SPREC_PORT: "8080"
-      SPREC_BACKEND: http://127.0.0.1:3030
+      SPREC_BACKEND: http://chantrail:3030
       SPREC_DATA_DIR: /data
       SPREC_RECORDING_START_TIMEOUT: "30"
       SPREC_FFMPEG_STALL_TIMEOUT: "45"
@@ -19,9 +35,9 @@ services:
       SPREC_FFMPEG_MAX_RECONNECTS: "0"
     ports:
       - "8080:8080"
-      - "3030:3030"
     volumes:
       - /mnt/services/SPRECORDER/config:/data/config
       - /mnt/services/SPRECORDER/recordings:/data/recordings
       - /mnt/services/SPRECORDER/modules:/data/modules
       - /mnt/services/SPRECORDER/logs:/data/logs
+
