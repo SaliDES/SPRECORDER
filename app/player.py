@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, signal, subprocess, threading, time, re
+import json, os, signal, subprocess, threading, time, re, platform, shutil, traceback, select
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 from urllib.request import Request, urlopen
@@ -8,12 +8,19 @@ HOST=os.environ.get('SPREC_HOST','0.0.0.0'); PORT=int(os.environ.get('SPREC_PORT
 FFMPEG=os.environ.get('SPREC_FFMPEG') or 'ffmpeg'
 ROOT=os.path.dirname(os.path.abspath(__file__)); DATA_DIR=os.environ.get('SPREC_DATA_DIR',os.path.join(ROOT,'data')); os.makedirs(DATA_DIR,exist_ok=True)
 RECORDINGS=os.path.join(DATA_DIR,'recordings'); os.makedirs(RECORDINGS,exist_ok=True)
+LOGS=os.path.join(DATA_DIR,'logs'); os.makedirs(LOGS,exist_ok=True)
 MODELS_FILE=os.path.join(DATA_DIR,'models.json')
-lock=threading.RLock(); recordings={}; models={}; status_cache={}
+lock=threading.RLock(); recordings={}; models={}; status_cache={}; last_results={}
+STARTUP_TIMEOUT=float(os.environ.get('SPREC_RECORDING_START_TIMEOUT','30'))
+STALL_TIMEOUT=float(os.environ.get('SPREC_FFMPEG_STALL_TIMEOUT','45'))
+RECONNECT_DELAY=float(os.environ.get('SPREC_FFMPEG_RECONNECT_DELAY','5'))
+MAX_RECONNECTS=int(os.environ.get('SPREC_FFMPEG_MAX_RECONNECTS','0'))  # 0 = unlimited while recording
+CHUNK_SIZE=64*1024
+FFMPEG_ERROR_RE=re.compile(r'(?:error|failed|corrupt|non-existing PPS|decode_slice_header|no frame|DTS .*out of order|invalid|I/O error|Connection .* failed)',re.I)
 
 PAGE=r'''<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SPRECORDER</title><script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.8.0/dist/mpegts.min.js"></script><style>
 *{box-sizing:border-box}body{margin:0;background:#0f1115;color:#eee;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}main{max-width:1450px;margin:24px auto;padding:0 18px}.top{display:flex;align-items:center;justify-content:space-between}.tabs{display:flex;gap:8px;margin:22px 0 18px}.tab{padding:10px 16px;border:1px solid #333842;background:#191c23;color:#bbb;border-radius:9px;cursor:pointer;font-weight:700}.tab.active{background:#3498db;color:#fff;border-color:#3498db}.panel{display:none}.panel.active{display:block}.top h1{margin:0}.add{display:flex;gap:8px;margin:14px 0}.add input{flex:1;min-width:220px;padding:12px;border-radius:9px;border:1px solid #3a3d45;background:#1b1e25;color:#fff;font-size:15px}.add button,.small{padding:10px 14px;border:0;border-radius:8px;cursor:pointer;font-weight:600}.add button{background:#2ecc71}.summary{color:#aaa;margin:8px 0 18px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:18px}.autoGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}.card{background:#171a21;border:1px solid #2c3039;border-radius:14px;overflow:hidden;box-shadow:0 5px 18px #0004}.head{display:flex;align-items:center;gap:12px;padding:12px 14px}.avatar{width:52px;height:52px;border-radius:50%;object-fit:cover;background:#292d35;border:2px solid #363b46}.name{font-weight:700;font-size:17px}.state{font-size:13px;color:#999;margin-top:3px}.state.live{color:#2ecc71}.spacer{flex:1}.remove{background:#2a2e36;color:#bbb}.videoWrap{position:relative;background:#000}.videoWrap video{display:block;width:100%;aspect-ratio:16/9;background:#000}.overlay{position:absolute;left:10px;top:10px;background:#000b;padding:5px 8px;border-radius:7px;font-size:12px}.controls{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px}.monitor{background:#3498db;color:white}.record{background:#e67e22;color:#fff}.record.active{background:#c0392b}.autoRec{background:#8e44ad;color:#fff}.meta{padding:0 14px 12px;color:#8d929d;font-size:12px;min-height:18px}.autoCard{padding:15px}.autoControls{display:flex;gap:8px;align-items:center;margin-top:14px}.autoDesc{color:#9ca1ab;font-size:13px;line-height:1.45;margin-top:8px}.empty{padding:50px 20px;text-align:center;color:#777;border:1px dashed #343842;border-radius:12px}.hint{color:#777;font-size:12px;margin-top:14px}.sectionTitle{font-size:20px;font-weight:700}.sectionDesc{color:#999;margin:6px 0 16px}@media(max-width:520px){.grid,.autoGrid{grid-template-columns:1fr}.card{min-width:0}}
-</style></head><body><main><div class="top"><h1>SPRECORDER</h1><div id="summary" class="summary"></div></div><div class="tabs"><button class="tab active" data-tab="manual" onclick="switchTab('manual')">Monitoring</button><button class="tab" data-tab="auto" onclick="switchTab('auto')">Enregistrement automatique</button></div>
+</style></head><body><main><div class="top"><h1>SPRECORDER</h1><div id="summary" class="summary"></div></div><div class="tabs"><button class="small" style="background:#444;color:#fff" onclick="recoverPartials()">Récupérer les .ts.part</button><button class="tab active" data-tab="manual" onclick="switchTab('manual')">Monitoring</button><button class="tab" data-tab="auto" onclick="switchTab('auto')">Enregistrement automatique</button></div>
 <section id="manualPanel" class="panel active"><div class="sectionTitle">Monitoring manuel</div><div class="sectionDesc">Ajoute tes modèles, surveille chaque live indépendamment et lance ou arrête l'enregistrement quand tu le souhaites.</div><div class="add"><input id="newModel" placeholder="Ajouter un modèle, ex: MasonxHer" autocomplete="off"><button onclick="addModel('manual')">+ Ajouter</button></div><div id="manualGrid" class="grid"></div><div id="manualEmpty" class="empty">Ajoute un ou plusieurs modèles pour commencer.</div></section>
 <section id="autoPanel" class="panel"><div class="sectionTitle">Enregistrement automatique</div><div class="sectionDesc">Les modèles placés ici sont surveillés en permanence. Dès qu'un modèle passe en ligne, SPRECORDER démarre automatiquement l'enregistrement. Lorsqu'il repasse hors ligne, le MP4 est finalisé.</div><div class="add"><input id="newAutoModel" placeholder="Ajouter un modèle à enregistrer automatiquement" autocomplete="off"><button onclick="addModel('auto')">+ Ajouter</button></div><div id="autoGrid" class="autoGrid"></div><div id="autoEmpty" class="empty">Aucun modèle en enregistrement automatique.</div></section>
 <div class="hint">Le backend original ChanTrail reste responsable du relay, du HLS et de la résolution Stripchat. Les deux listes sont indépendantes.</div></main><script>
@@ -27,11 +34,14 @@ function monitor(m){if(players[m]){stopMonitor(m);return}const video=document.qu
 function stopMonitor(m){const p=players[m];if(p){try{p.pause()}catch(e){}try{p.destroy()}catch(e){}delete players[m]}const v=document.querySelector('[data-video="'+CSS.escape(m)+'"]');if(v){v.removeAttribute('src');try{v.load()}catch(e){}}setMeta(m,'Monitoring arrêté');updateControls(m)}
 function setMeta(m,s){const el=document.querySelector('[data-meta="'+CSS.escape(m)+'"]');if(el)el.textContent=s}
 function updateControls(m){const btn=document.querySelector('[data-monitor="'+CSS.escape(m)+'"]');if(btn)btn.textContent=players[m]?'Arrêter le monitoring':'Monitorer le live'}
+function recoverPartials(){fetch('/record/recover').then(r=>r.json()).then(j=>alert(j.recovered&&j.recovered.length?'Récupérés : '+j.recovered.join(', '):'Aucun .ts.part récupérable.')).catch(e=>alert(e.message))}
 function rec(m){fetch('/record/toggle?model='+encodeURIComponent(m),{method:'POST'}).then(r=>r.json()).then(j=>{if(!j.ok)throw Error(j.error);return refreshStatus()}).catch(e=>alert(e.message))}
-function renderManual(){const names=Object.keys(data.manual||{});manualEmpty.style.display=names.length?'none':'block';manualGrid.innerHTML=names.map(m=>{const x=data.manual[m],live=x.online,rec=x.recording,mon=!!players[m];return `<section class="card"><div class="head"><img class="avatar" src="${esc(x.avatar||'')}" onerror="this.style.visibility='hidden'"><div><div class="name">${esc(m)}</div><div class="state ${live?'live':''}" data-state="${esc(m)}">${live?'● EN LIGNE':'○ HORS LIGNE'}${rec?' · ENREGISTREMENT':''}</div></div><div class="spacer"></div><button class="small remove" onclick="removeModel('manual','${esc(m)}')">Supprimer</button></div><div class="videoWrap"><video data-video="${esc(m)}" controls autoplay muted playsinline></video><div class="overlay" data-overlay="${esc(m)}" style="display:${live?'block':'none'}">LIVE</div></div><div class="controls"><button class="small monitor" data-monitor="${esc(m)}" onclick="monitor('${esc(m)}')">${mon?'Arrêter le monitoring':'Monitorer le live'}</button><button class="small record ${rec?'active':''}" data-record="${esc(m)}" onclick="rec('${esc(m)}')">${rec?'Arrêter l’enregistrement':'Enregistrer maintenant'}</button></div><div class="meta" data-meta="${esc(m)}">${rec?'Fichier: '+esc(x.file):mon?'Monitoring actif':'Prêt.'}</div></section>`}).join('')}
+function renderManual(){const names=Object.keys(data.manual||{});manualEmpty.style.display=names.length?'none':'block';manualGrid.innerHTML=names.map(m=>{const x=data.manual[m],live=x.online,rec=x.recording,mon=!!players[m];return `<section class="card"><div class="head"><img class="avatar" src="${esc(x.avatar||'')}" onerror="this.style.visibility='hidden'"><div><div class="name">${esc(m)}</div><div class="state ${live?'live':''}" data-state="${esc(m)}">${live?'● EN LIGNE':'○ HORS LIGNE'}${rec?' · ENREGISTREMENT':''}</div></div><div class="spacer"></div><button class="small remove" onclick="removeModel('manual','${esc(m)}')">Supprimer</button></div><div class="videoWrap"><video data-video="${esc(m)}" controls autoplay muted playsinline></video><div class="overlay" data-overlay="${esc(m)}" style="display:${live?'block':'none'}">LIVE</div></div><div class="controls"><button class="small monitor" data-monitor="${esc(m)}" onclick="monitor('${esc(m)}')">${mon?'Arrêter le monitoring':'Monitorer le live'}</button><button class="small record ${rec?'active':''}" data-record="${esc(m)}" onclick="rec('${esc(m)}')">${rec?'Arrêter l’enregistrement':'Enregistrer maintenant'}</button></div><div class="meta" data-meta="${esc(m)}">${x.recording_error?'Erreur: '+esc(x.recording_error):rec?'RECORDING · '+esc(formatBytes(x.bytes))+' · '+esc(formatDuration(x.duration))+' · reconnexions '+esc(x.reconnections):mon?'Monitoring actif':'Prêt.'}</div></section>`}).join('')}
 function renderAuto(){const names=Object.keys(data.auto||{});autoEmpty.style.display=names.length?'none':'block';autoGrid.innerHTML=names.map(m=>{const x=data.auto[m],live=x.online,rec=x.recording;return `<section class="card autoCard"><div class="head" style="padding:0"><img class="avatar" src="${esc(x.avatar||'')}" onerror="this.style.visibility='hidden'"><div><div class="name">${esc(m)}</div><div class="state ${live?'live':''}" data-autostate="${esc(m)}">${live?'● EN LIGNE':'○ HORS LIGNE'}</div></div><div class="spacer"></div><button class="small remove" onclick="removeModel('auto','${esc(m)}')">Supprimer</button></div><div class="autoDesc">${live?(rec?'Enregistrement automatique en cours.':'En ligne — démarrage automatique.'):'Hors ligne — en attente du prochain live.'}</div><div class="autoControls"><button class="small autoRec" onclick="rec('${esc(m)}')">${rec?'Arrêter maintenant':'Enregistrer maintenant'}</button></div><div class="meta" data-autometa="${esc(m)}">${rec?'Fichier: '+esc(x.file):'Surveillance automatique active.'}</div></section>`}).join('')}
+function formatBytes(n){n=Number(n||0);const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<4){n/=1024;i++}return n.toFixed(i?1:0)+' '+u[i]}
+function formatDuration(n){n=Math.max(0,Math.floor(Number(n||0)));const h=String(Math.floor(n/3600)).padStart(2,'0'),m=String(Math.floor(n%3600/60)).padStart(2,'0'),s=String(n%60).padStart(2,'0');return h+':'+m+':'+s}
 function updateSummary(){const a=Object.keys(data.manual||{}).length,b=Object.keys(data.auto||{}).length;summary.textContent=(a+b)+' modèle'+(a+b>1?'s':'')+' · '+a+' monitoring · '+b+' auto'}
-function updateStatuses(){Object.keys(data.manual||{}).forEach(m=>{const x=data.manual[m],state=document.querySelector('[data-state="'+CSS.escape(m)+'"]');if(state){state.className='state '+(x.online?'live':'');state.textContent=(x.online?'● EN LIGNE':'○ HORS LIGNE')+(x.recording?' · ENREGISTREMENT':'')}const ov=document.querySelector('[data-overlay="'+CSS.escape(m)+'"]');if(ov)ov.style.display=x.online?'block':'none';updateControls(m);const b=document.querySelector('[data-record="'+CSS.escape(m)+'"]');if(b){b.textContent=x.recording?'Arrêter l’enregistrement':'Enregistrer maintenant';b.className='small record '+(x.recording?'active':'')}});Object.keys(data.auto||{}).forEach(m=>{const x=data.auto[m],state=document.querySelector('[data-autostate="'+CSS.escape(m)+'"]');if(state){state.className='state '+(x.online?'live':'');state.textContent=x.online?'● EN LIGNE':'○ HORS LIGNE'}const meta=document.querySelector('[data-autometa="'+CSS.escape(m)+'"]');if(meta)meta.textContent=x.recording?'Fichier: '+x.file:'Surveillance automatique active.'})}
+function updateStatuses(){Object.keys(data.manual||{}).forEach(m=>{const x=data.manual[m],state=document.querySelector('[data-state="'+CSS.escape(m)+'"]');if(state){state.className='state '+(x.online?'live':'');state.textContent=(x.online?'● EN LIGNE':'○ HORS LIGNE')+(x.recording?' · ENREGISTREMENT':'')}const ov=document.querySelector('[data-overlay="'+CSS.escape(m)+'"]');if(ov)ov.style.display=x.online?'block':'none';updateControls(m);const b=document.querySelector('[data-record="'+CSS.escape(m)+'"]');if(b){b.textContent=x.recording?'Arrêter l’enregistrement':'Enregistrer maintenant';b.className='small record '+(x.recording?'active':'')}const meta=document.querySelector('[data-meta="'+CSS.escape(m)+'"]');if(meta){if(x.recording)meta.textContent='RECORDING · '+formatBytes(x.bytes)+' · '+formatDuration(x.duration)+' · reconnexions '+x.reconnections+' · erreurs FFmpeg '+x.ffmpeg_errors;else if(x.recording_error)meta.textContent='Erreur: '+x.recording_error;else if(x.recording_state==='RECONNECTING')meta.textContent='Reconnexion… '+x.reconnections+' · '+formatBytes(x.bytes);}});Object.keys(data.auto||{}).forEach(m=>{const x=data.auto[m],state=document.querySelector('[data-autostate="'+CSS.escape(m)+'"]');if(state){state.className='state '+(x.online?'live':'');state.textContent=x.online?'● EN LIGNE':'○ HORS LIGNE'}const meta=document.querySelector('[data-autometa="'+CSS.escape(m)+'"]');if(meta)meta.textContent=x.recording?'RECORDING · '+formatBytes(x.bytes)+' · '+formatDuration(x.duration)+' · reconnexions '+x.reconnections+' · erreurs FFmpeg '+x.ffmpeg_errors:(x.recording_error?'Erreur: '+x.recording_error:'Surveillance automatique active.')})}
 async function refreshStatus(){try{const r=await fetch('/models/status?ts='+Date.now(),{cache:'no-store'}),j=await r.json(),next=j.models||{manual:{},auto:{}};const oldManual=Object.keys(data.manual||{}).sort().join('\n'),oldAuto=Object.keys(data.auto||{}).sort().join('\n'),newManual=Object.keys(next.manual||{}).sort().join('\n'),newAuto=Object.keys(next.auto||{}).sort().join('\n');data=next;if(oldManual!==newManual||oldAuto!==newAuto){renderManual();renderAuto()}updateSummary();updateStatuses()}catch(e){}}
 refreshStatus();setInterval(refreshStatus,5000);
 </script></body></html>
@@ -189,40 +199,278 @@ def snapshot():
         out={'manual':{},'auto':{}}
         for kind in ('manual','auto'):
             for m,x in models[kind].items():
-                r=recordings.get(m); out[kind][m]={**x,'recording':bool(r),'file':r['file'] if r else None}
+                r=recordings.get(m)
+                last=last_results.get(m,{})
+                item={**x,'recording':bool(r and r.get('connected')),'recording_state':r.get('state') if r else last.get('state','IDLE'),
+                      'file':r.get('file') if r and r.get('file') else last.get('file'),'recording_error':r.get('error') if r else last.get('error'),
+                      'recording_reason':r.get('reason') if r else last.get('reason'),'bytes':r.get('bytes_written',last.get('bytes',0)) if r else last.get('bytes',0),
+                      'duration':max(0,time.time()-r.get('started',time.time())) if r else last.get('duration',0),
+                      'reconnections':r.get('reconnects',last.get('reconnections',0)) if r else last.get('reconnections',0),
+                      'ffmpeg_errors':r.get('ffmpeg_errors',last.get('ffmpeg_errors',0)) if r else last.get('ffmpeg_errors',0)}
+                out[kind][m]=item
         return out
+
+def _stream_url(model):
+    return BACKEND.rstrip('/') + '/stream/' + quote(model, safe='')
+
+def _human_bytes(n):
+    n=float(n or 0)
+    for unit in ('B','KB','MB','GB','TB'):
+        if n < 1024 or unit == 'TB': return f'{n:.1f} {unit}'
+        n /= 1024
+
+def _human_duration(seconds):
+    seconds=max(0,int(seconds or 0)); h,rem=divmod(seconds,3600); m,sec=divmod(rem,60)
+    return f'{h:02d}:{m:02d}:{sec:02d}'
+
+def _log_ffmpeg_line(rec, line):
+    line=line.rstrip('\n')
+    if not line: return
+    rec['log'].write(line+'\n')
+    if FFMPEG_ERROR_RE.search(line):
+        rec['ffmpeg_errors'] += 1
+        rec['last_ffmpeg_error']=line[-500:]
+    rec['last_stderr']=line[-500:]
+
+def _terminate_process(proc):
+    if proc is None: return
+    if proc.poll() is None:
+        try: proc.send_signal(signal.SIGINT)
+        except Exception:
+            try: proc.terminate()
+            except Exception: pass
+        try: proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try: proc.kill()
+            except Exception: pass
+            try: proc.wait(timeout=5)
+            except Exception: pass
+
+def _build_ffmpeg_cmd(model, url, output='pipe:1'):
+    # Keep stream copy. discardcorrupt skips damaged packets instead of making one bad packet fatal.
+    # genpts lets FFmpeg synthesize missing PTS; avoid_negative_ts keeps the TS timeline sane.
+    return [FFMPEG,'-hide_banner','-loglevel','warning','-nostdin','-y',
+            '-user_agent','Mozilla/5.0 SPRECORDER/1.0',
+            '-headers','Accept: video/mp2t,*/*;q=0.8\r\nOrigin: http://127.0.0.1:8080\r\n',
+            '-rw_timeout','15000000','-reconnect','1','-reconnect_streamed','1','-reconnect_delay_max','5',
+            '-fflags','+discardcorrupt+genpts',
+            '-err_detect','ignore_err',
+            '-i',url,
+            '-map','0',
+            '-c','copy',
+            '-avoid_negative_ts','make_non_negative',
+            '-muxpreload','0','-muxdelay','0',
+            '-f','mpegts',output]
+
+def _start_ffmpeg(model, rec):
+    url=rec['url']
+    cmd=_build_ffmpeg_cmd(model,url,'pipe:1')
+    rec['log'].write(f"[SPRECORDER] FFmpeg command attempt={rec['attempts']+1}: {' '.join(cmd)}\n")
+    try:
+        proc=subprocess.Popen(cmd,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,bufsize=0)
+    except Exception as e:
+        rec['error']=f'Impossible de lancer FFmpeg: {e}'
+        return None
+    rec['proc']=proc
+    rec['attempts'] += 1
+    return proc
+
+def _read_stderr(proc, rec):
+    try:
+        while True:
+            raw=proc.stderr.readline()
+            if not raw: break
+            _log_ffmpeg_line(rec,raw.decode('utf-8','replace'))
+    except Exception as e:
+        with lock: rec['log'].write(f'[SPRECORDER] stderr reader error: {e}\n')
+
+def _record_worker(model):
+    with lock: rec=recordings.get(model)
+    if not rec: return
+    part=rec['ts']
+    try:
+        with open(part,'ab',buffering=0) as out:
+            while True:
+                with lock:
+                    if rec['stop_requested']:
+                        break
+                    attempts=rec['attempts']
+                if MAX_RECONNECTS and rec['reconnects'] >= MAX_RECONNECTS:
+                    rec['reason']='Nombre maximal de reconnexions atteint'
+                    break
+                proc=_start_ffmpeg(model,rec)
+                if proc is None:
+                    with lock: rec['state']='RECONNECTING'; rec['connected']=False
+                    time.sleep(RECONNECT_DELAY); rec['reconnects'] += 1
+                    continue
+                stderr_thread=threading.Thread(target=_read_stderr,args=(proc,rec),daemon=True)
+                stderr_thread.start()
+                first_data_deadline=time.monotonic()+STARTUP_TIMEOUT
+                last_data=time.monotonic()
+                got_data=False
+                while True:
+                    with lock:
+                        stopping=rec['stop_requested']
+                    if stopping:
+                        _terminate_process(proc); break
+                    try:
+                        ready,_,_=select.select([proc.stdout],[],[],0.5)
+                        chunk=proc.stdout.read(CHUNK_SIZE) if ready else b''
+                    except Exception as e:
+                        with lock: rec['last_ffmpeg_error']=str(e); rec['ffmpeg_errors']+=1
+                        chunk=b''
+                    now=time.monotonic()
+                    if chunk:
+                        out.write(chunk); out.flush()
+                        with lock:
+                            rec['bytes_written'] += len(chunk)
+                            rec['last_data']=time.time()
+                            if not rec['connected']:
+                                rec['connected']=True
+                                rec['state']='RECORDING'
+                                rec['first_data_at']=time.time()
+                                rec['log'].write('[SPRECORDER] RECORDING confirmed: FFmpeg produced data.\n')
+                        got_data=True; last_data=now
+                        if time.time()-rec.get('last_stats_log',rec['started']) >= 30:
+                            with lock:
+                                rec['last_stats_log']=time.time()
+                                rec['log'].write(f"[SPRECORDER] stats bytes={rec['bytes_written']} duration={_human_duration(time.time()-rec['started'])} reconnects={rec['reconnects']} ffmpeg_errors={rec['ffmpeg_errors']}\n")
+                        continue
+                    rc=proc.poll()
+                    if rc is not None: break
+                    if not got_data and now >= first_data_deadline:
+                        with lock:
+                            rec['reason']='FFmpeg démarré mais aucune donnée reçue dans le délai de démarrage'
+                            rec['log'].write('[SPRECORDER] Startup timeout: no output data. Reconnecting.\n')
+                        _terminate_process(proc); break
+                    if got_data and now-last_data >= STALL_TIMEOUT:
+                        with lock:
+                            rec['reason']=f'Flux FFmpeg bloqué depuis {STALL_TIMEOUT:.0f}s'
+                            rec['log'].write(f'[SPRECORDER] Stall detected after {STALL_TIMEOUT:.0f}s without data. Reconnecting.\n')
+                        _terminate_process(proc); break
+                    time.sleep(0.2)
+                rc=proc.poll()
+                stderr_thread.join(timeout=2)
+                try: proc.stdout.close()
+                except Exception: pass
+                try: proc.stderr.close()
+                except Exception: pass
+                with lock:
+                    rec['proc']=None
+                    if rec['stop_requested']:
+                        rec['reason']=rec.get('reason') or 'Arrêt demandé par l’utilisateur'
+                        break
+                    rec['connected']=False
+                    rec['state']='RECONNECTING'
+                    rec['last_exit_code']=rc
+                    rec['reconnects'] += 1
+                    reason=rec.get('reason') or f'FFmpeg s’est arrêté (code {rc})'
+                    rec['reason']=reason
+                    rec['log'].write(f'[SPRECORDER] FFmpeg disconnected: {reason}; reconnect #{rec["reconnects"]}.\n')
+                time.sleep(RECONNECT_DELAY)
+        # Worker only reaches here after requested stop or terminal condition.
+        with lock:
+            normal=rec['stop_requested'] and rec['bytes_written']>0
+            rec['connected']=False
+            rec['state']='FINALIZING' if normal else 'ERROR'
+            if not normal and not rec.get('reason'): rec['reason']='Enregistrement interrompu sans arrêt normal'
+        if normal:
+            os.replace(part,rec['final'])
+            with lock:
+                rec['file']=os.path.basename(rec['final'])
+                rec['state']='IDLE'; rec['finished_at']=time.time(); rec['reason']='Arrêt normal; fichier .ts finalisé atomiquement'
+                rec['log'].write(f"[SPRECORDER] NORMAL STOP bytes={rec['bytes_written']} duration={_human_duration(time.time()-rec['started'])} -> {rec['final']}\n")
+        else:
+            with lock:
+                rec['error']=rec.get('reason') or 'FFmpeg arrêté; .ts.part conservé'
+                rec['state']='ERROR'
+                rec['log'].write(f"[SPRECORDER] FAILED bytes={rec['bytes_written']} duration={_human_duration(time.time()-rec['started'])} reason={rec['error']} -- keeping {part}\n")
+    except Exception as e:
+        with lock:
+            rec['error']=f'Erreur recorder: {e}'
+            rec['reason']=rec['error']
+            rec['state']='ERROR'; rec['connected']=False
+            rec['log'].write('[SPRECORDER] Worker exception: '+traceback.format_exc()+'\n')
+    finally:
+        try: rec['log'].flush(); rec['log'].close()
+        except Exception: pass
+        with lock:
+            rec['proc']=None
+            # Keep failed/reconnecting records visible; remove only after successful finalization.
+            if rec.get('state') in ('IDLE','ERROR'):
+                last_results[model]={
+                    'state':rec.get('state'),'file':rec.get('file'),'error':rec.get('error'),'reason':rec.get('reason'),
+                    'bytes':rec.get('bytes_written',0),'duration':max(0,time.time()-rec.get('started',time.time())),
+                    'reconnections':rec.get('reconnects',0),'ffmpeg_errors':rec.get('ffmpeg_errors',0)
+                }
+                recordings.pop(model,None)
 
 def start_record(model):
     model=safe_model(model)
     with lock:
-        if model in recordings: raise RuntimeError('Cet enregistrement est déjà en cours')
-        stamp=time.strftime('%Y%m%d_%H%M%S'); base=f'{model}_{stamp}'; ts=os.path.join(RECORDINGS,base+'.ts.part'); final=os.path.join(RECORDINGS,base+'.mp4'); logpath=os.path.join(RECORDINGS,'ffmpeg_'+stamp+'_'+re.sub(r'[^A-Za-z0-9_-]','_',model)+'.log')
-        url=BACKEND+'/stream/'+quote(model,safe=''); log=open(logpath,'w')
-        cmd=[FFMPEG,'-hide_banner','-loglevel','warning','-y','-i',url,'-map','0','-c','copy','-f','mpegts',ts]
-        proc=subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=log)
-        recordings[model]={'proc':proc,'ts':ts,'final':final,'file':base+'.mp4','log':log,'logpath':logpath,'model':model}
-        return base+'.mp4'
+        existing=recordings.get(model)
+        if existing and existing.get('state') not in ('ERROR','IDLE'):
+            raise RuntimeError('Cet enregistrement est déjà en cours ou en reconnexion')
+        if existing: recordings.pop(model,None)
+    url=_stream_url(model)
+    stamp=time.strftime('%Y%m%d_%H%M%S')
+    base=f'{model}_{stamp}'
+    ts=os.path.join(RECORDINGS,base+'.ts.part')
+    final=os.path.join(RECORDINGS,base+'.ts')
+    logpath=os.path.join(LOGS,'ffmpeg_'+stamp+'_'+re.sub(r'[^A-Za-z0-9_-]','_',model)+'.log')
+    try:
+        test=os.path.join(RECORDINGS,'.sprecorder_write_test')
+        with open(test,'ab') as f: f.write(b'')
+        os.remove(test)
+    except OSError as e:
+        raise RuntimeError(f'Le conteneur ne peut pas écrire dans {RECORDINGS}: {e}')
+    log=open(logpath,'w',buffering=1)
+    log.write(f'[SPRECORDER] model={model} url={url}\n')
+    log.write(f'[SPRECORDER] options=discardcorrupt,genpts,ignore_err,stream_copy\n')
+    rec={'proc':None,'ts':ts,'final':final,'file':None,'log':log,'logpath':logpath,'model':model,'url':url,
+         'started':time.time(),'bytes_written':0,'reconnects':0,'attempts':0,'ffmpeg_errors':0,'last_data':None,
+         'last_ffmpeg_error':None,'last_stderr':None,'connected':False,'state':'CONNECTING','error':None,
+         'reason':'En attente des premières données FFmpeg','stop_requested':False}
+    with lock:
+        last_results.pop(model,None)
+        recordings[model]=rec
+    threading.Thread(target=_record_worker,args=(model,),name=f'recorder-{model}',daemon=True).start()
+    return base+'.ts'
 
 def stop_record(model):
     model=safe_model(model)
     with lock:
-        rec=recordings.pop(model,None)
+        rec=recordings.get(model)
         if not rec: raise RuntimeError('Aucun enregistrement en cours pour '+model)
-    p=rec['proc']
-    try:
-        if p.poll() is None:
-            try:p.send_signal(signal.SIGINT)
-            except Exception:p.terminate()
-            try:p.wait(timeout=25)
-            except subprocess.TimeoutExpired:p.kill();p.wait()
-    finally: rec['log'].close()
-    if not os.path.exists(rec['ts']) or os.path.getsize(rec['ts'])==0: raise RuntimeError('Le flux enregistré est vide. Consulte '+rec['logpath'])
-    cmd=[FFMPEG,'-hide_banner','-loglevel','warning','-y','-i',rec['ts'],'-c','copy','-movflags','+faststart',rec['final']]
-    with open(rec['logpath'],'a') as log: rc=subprocess.run(cmd,stdout=subprocess.DEVNULL,stderr=log).returncode
-    if rc!=0 or not os.path.exists(rec['final']) or os.path.getsize(rec['final'])==0: raise RuntimeError('Conversion MP4 échouée. Consulte '+rec['logpath'])
-    try:os.remove(rec['ts'])
-    except OSError:pass
-    return rec['file']
+        rec['stop_requested']=True
+        rec['reason']='Arrêt demandé par l’utilisateur'
+        proc=rec.get('proc')
+    if proc: _terminate_process(proc)
+    deadline=time.time()+35
+    while time.time()<deadline:
+        with lock:
+            if model not in recordings: return os.path.basename(rec['final'])
+            state=rec.get('state')
+            if state=='ERROR': raise RuntimeError(rec.get('error') or 'Enregistrement interrompu; .ts.part conservé')
+        time.sleep(.25)
+    raise RuntimeError('Délai dépassé lors de l’arrêt; le .ts.part a été conservé')
+
+def recover_partials():
+    recovered=[]
+    for name in os.listdir(RECORDINGS):
+        if not name.endswith('.ts.part'): continue
+        src=os.path.join(RECORDINGS,name)
+        if not os.path.isfile(src) or os.path.getsize(src)<=0: continue
+        # We only recover/remux bytes that FFmpeg can parse; damaged H264 remains unrecoverable.
+        dst=src[:-5]+'.recovered.ts'
+        logpath=os.path.join(LOGS,'recovery_'+re.sub(r'[^A-Za-z0-9_.-]','_',name)+'.log')
+        cmd=[FFMPEG,'-hide_banner','-loglevel','warning','-y','-fflags','+discardcorrupt+genpts','-err_detect','ignore_err','-i',src,'-map','0','-c','copy','-avoid_negative_ts','make_non_negative','-f','mpegts',dst]
+        with open(logpath,'w',buffering=1) as log:
+            log.write(f'[RECOVERY] source={src} size={os.path.getsize(src)}\n')
+            rc=subprocess.run(cmd,stdout=subprocess.DEVNULL,stderr=log).returncode
+        if rc==0 and os.path.exists(dst) and os.path.getsize(dst)>0:
+            recovered.append(os.path.basename(dst))
+    return recovered
 
 class Handler(BaseHTTPRequestHandler):
     def js(self,code,data):
@@ -231,7 +479,8 @@ class Handler(BaseHTTPRequestHandler):
         path=urlparse(self.path).path
         if path in ('/','/index.html'):
             b=PAGE.encode();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b);return
-        if path=='/health':self.js(200,{'player':'ok'});return
+        if path=='/health':self.js(200,{'player':'ok','ffmpeg':FFMPEG,'recordings_dir':RECORDINGS});return
+        if path=='/record/recover':self.js(200,{'ok':True,'recovered':recover_partials()});return
         if path=='/models/status':self.js(200,{'models':snapshot()});return
         self.send_error(404)
     def do_POST(self):
@@ -261,6 +510,26 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self,fmt,*args):print('[PLAYER] '+fmt%args)
 
 if __name__=='__main__':
-    load_models(); threading.Thread(target=monitor_loop,daemon=True).start()
+    load_models()
+    try:
+        test=os.path.join(RECORDINGS,'.sprecorder_write_test')
+        with open(test,'ab') as f: f.write(b'')
+        os.remove(test)
+        print(f'[STARTUP] Recording directory writable: {RECORDINGS}')
+    except OSError as e:
+        print(f'[STARTUP] WARNING: recording directory is not writable: {e}')
+    print(f'[STARTUP] platform={platform.platform()} machine={platform.machine()}')
+    print(f'[STARTUP] ffmpeg={shutil.which(FFMPEG) or FFMPEG}')
+    print(f'[STARTUP] LD_PRELOAD={os.environ.get("LD_PRELOAD","")!r}')
+    try:
+        v=subprocess.run([FFMPEG,'-hide_banner','-version'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=10)
+        print('[STARTUP] ffmpeg_version='+v.stdout.splitlines()[0] if v.stdout else '[STARTUP] ffmpeg_version=unknown')
+        if v.returncode!=0: print('[STARTUP] WARNING: ffmpeg -version failed')
+    except Exception as e: print('[STARTUP] WARNING: ffmpeg preflight failed:',e)
+    try:
+        recovered=recover_partials()
+        if recovered: print('[RECOVERY] recovered partials: '+', '.join(recovered))
+    except Exception as e: print('[RECOVERY] scan failed:',e)
+    threading.Thread(target=monitor_loop,daemon=True).start()
     print(f'SPRECORDER player: http://{HOST}:{PORT}');print(f'FFmpeg: {FFMPEG}');print(f'Recordings: {RECORDINGS}')
     ThreadingHTTPServer((HOST,PORT),Handler).serve_forever()
