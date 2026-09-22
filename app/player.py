@@ -467,7 +467,11 @@ def recover_partials():
         cmd=[FFMPEG,'-hide_banner','-loglevel','warning','-y','-fflags','+discardcorrupt+genpts','-err_detect','ignore_err','-i',src,'-map','0','-c','copy','-avoid_negative_ts','make_non_negative','-f','mpegts',dst]
         with open(logpath,'w',buffering=1) as log:
             log.write(f'[RECOVERY] source={src} size={os.path.getsize(src)}\n')
-            rc=subprocess.run(cmd,stdout=subprocess.DEVNULL,stderr=log).returncode
+            try:
+                rc=subprocess.run(cmd,stdout=subprocess.DEVNULL,stderr=log,timeout=120).returncode
+            except subprocess.TimeoutExpired:
+                log.write('[RECOVERY] timeout after 120s; keeping source .ts.part\n')
+                rc=-124
         if rc==0 and os.path.exists(dst) and os.path.getsize(dst)>0:
             recovered.append(os.path.basename(dst))
     return recovered
@@ -526,10 +530,25 @@ if __name__=='__main__':
         print('[STARTUP] ffmpeg_version='+v.stdout.splitlines()[0] if v.stdout else '[STARTUP] ffmpeg_version=unknown')
         if v.returncode!=0: print('[STARTUP] WARNING: ffmpeg -version failed')
     except Exception as e: print('[STARTUP] WARNING: ffmpeg preflight failed:',e)
+    # Never block HTTP startup on recovery of an old .ts.part. Recovery runs in
+    # the background and each FFmpeg recovery job has a hard timeout.
+    def background_recovery():
+        try:
+            recovered=recover_partials()
+            if recovered: print('[RECOVERY] recovered partials: '+', '.join(recovered), flush=True)
+            else: print('[RECOVERY] startup scan complete; no recovered partials', flush=True)
+        except Exception as e:
+            print('[RECOVERY] scan failed:',e, flush=True)
+    threading.Thread(target=background_recovery,daemon=True,name='recovery').start()
+    threading.Thread(target=monitor_loop,daemon=True,name='monitor').start()
+    print(f'SPRECORDER player: http://{HOST}:{PORT}', flush=True)
+    print(f'FFmpeg: {FFMPEG}', flush=True)
+    print(f'Recordings: {RECORDINGS}', flush=True)
     try:
-        recovered=recover_partials()
-        if recovered: print('[RECOVERY] recovered partials: '+', '.join(recovered))
-    except Exception as e: print('[RECOVERY] scan failed:',e)
-    threading.Thread(target=monitor_loop,daemon=True).start()
-    print(f'SPRECORDER player: http://{HOST}:{PORT}');print(f'FFmpeg: {FFMPEG}');print(f'Recordings: {RECORDINGS}')
-    ThreadingHTTPServer((HOST,PORT),Handler).serve_forever()
+        server=ThreadingHTTPServer((HOST,PORT),Handler)
+        print(f'[HTTP] listening on {HOST}:{PORT}', flush=True)
+        server.serve_forever()
+    except Exception:
+        print('[HTTP] FATAL SERVER ERROR', flush=True)
+        traceback.print_exc()
+        raise
