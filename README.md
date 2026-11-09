@@ -104,3 +104,53 @@ docker build --platform linux/amd64 -t sprecorder:robust .
 ## GitHub Actions
 
 Le workflow publie `ghcr.io/salides/sprecorder:latest` pour `linux/amd64`.
+
+
+## Conversion automatique en MP4
+
+À chaque arrêt normal (arrêt manuel ou arrêt automatique après confirmation hors ligne) :
+
+1. le `.ts.part` est finalisé en `.ts` ;
+2. FFmpeg remuxe le TS vers un fichier temporaire `.mp4.part` avec `-c copy` (pas de réencodage) ;
+3. si FFmpeg réussit et que `ffprobe` confirme une piste vidéo et une durée supérieure à zéro, le MP4 est renommé atomiquement ;
+4. le TS source est supprimé **uniquement après validation du MP4**.
+
+Si la conversion échoue ou si le MP4 est invalide, le `.ts` source est conservé et l'interface affiche une erreur. Les fichiers `.ts.part` issus d'une panne ne sont pas convertis automatiquement tant qu'ils ne sont pas récupérés/finalisés.
+
+## Arrêt automatique hors ligne
+
+Le moniteur vérifie chaque modèle toutes les 10 secondes. Pour éviter qu'une réponse réseau isolée arrête un live, il exige par défaut 3 contrôles hors ligne consécutifs. Il attend ensuite que le fichier n'ait pas grossi pendant 15 secondes avant d'arrêter FFmpeg et de lancer la conversion MP4. Cela s'applique aux enregistrements manuels et automatiques.
+
+Variables configurables dans `docker-compose.yml` :
+
+- `SPREC_OFFLINE_CONFIRMATIONS=3` : nombre de contrôles hors ligne consécutifs.
+- `SPREC_OFFLINE_NO_GROWTH_SECONDS=15` : délai sans nouvelles données avant l'arrêt.
+- `SPREC_CONVERT_TIMEOUT=14400` : timeout de conversion (4 heures).
+
+Un flux qui reste faussement détecté comme en ligne ou qui continue d'envoyer des données après le passage hors ligne peut retarder l'arrêt. Une vidéo réellement absente du flux ne peut pas être reconstruite par la conversion.
+
+
+## Installation sur TrueNAS SCALE (via GitHub Container Registry)
+
+Le dépôt contient aussi `docker-compose.truenas.yml`, destiné à l'écran **Install via YAML** de TrueNAS. Il utilise l'image publiée par GitHub Actions et conserve les données sur des chemins hôte persistants.
+
+1. Pousse tout le contenu du dépôt sur la branche `main` de ton GitHub.
+2. Dans GitHub, attends la réussite de l'action **Build and Publish SPRECORDER** dans l'onglet Actions. Elle publie `ghcr.io/<ton-utilisateur>/sprecorder:latest`.
+3. Dans les paramètres du package GitHub Container Registry, rends le package public, ou configure les identifiants du registre dans TrueNAS si tu veux le garder privé.
+4. Sur TrueNAS, crée un dataset/dossier pour les données, puis les sous-dossiers `config`, `recordings`, `modules` et `logs`. Le modèle fourni utilise `/mnt/services/SPRECORDER/...`; adapte ces chemins dans le YAML si ton dataset est ailleurs.
+5. Dans TrueNAS : **Apps > Discover Apps > Custom App > ⋮ > Install via YAML**. Donne le nom `sprecorder`, colle le contenu de `docker-compose.truenas.yml`, remplace `YOUR_GITHUB_USERNAME` par ton nom GitHub, puis enregistre.
+6. Ouvre `http://IP_DE_TON_NAS:8080`.
+
+Pour un déploiement en ligne de commande depuis un clone du dépôt, utilise plutôt le `docker-compose.yml` local (il construit l'image sur le NAS) :
+
+```bash
+docker compose up -d --build
+docker compose logs -f sprecorder
+```
+
+Avant toute mise à jour, arrête l'application mais **ne supprime jamais** les datasets `config` et `recordings`. Ils contiennent les modèles et les vidéos.
+
+Les versions actuelles de TrueNAS SCALE proposent le déploiement de Compose via **Install via YAML**. Les chemins hôte doivent exister avant le déploiement ; voir la documentation TrueNAS citée dans la procédure d'installation.
+
+
+**Limite importante concernant l'écran « OFFLINE » :** l'arrêt automatique utilise le statut public du profil (plusieurs contrôles consécutifs) et l'absence de croissance du fichier. Il ne fait pas d'OCR/analyse d'image du texte « OFFLINE » incrusté dans la vidéo. Si une image ou un segment OFFLINE a déjà été reçu avant l'arrêt, il peut donc se trouver dans le TS source et dans le MP4. Le TS est supprimé après conversion validée, pas avant.

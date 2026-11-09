@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-import json, os, signal, subprocess, threading, time, re, platform, shutil, traceback, select
+import json, os, signal, subprocess, threading, time, re, platform, shutil, traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 from urllib.request import Request, urlopen
 
 HOST=os.environ.get('SPREC_HOST','0.0.0.0'); PORT=int(os.environ.get('SPREC_PORT','8080')); BACKEND=os.environ.get('SPREC_BACKEND','http://127.0.0.1:3030')
 FFMPEG=os.environ.get('SPREC_FFMPEG') or 'ffmpeg'
+FFPROBE=os.environ.get('SPREC_FFPROBE') if 'SPREC_FFPROBE' in os.environ else shutil.which('ffprobe')
 ROOT=os.path.dirname(os.path.abspath(__file__)); DATA_DIR=os.environ.get('SPREC_DATA_DIR',os.path.join(ROOT,'data')); os.makedirs(DATA_DIR,exist_ok=True)
 RECORDINGS=os.path.join(DATA_DIR,'recordings'); os.makedirs(RECORDINGS,exist_ok=True)
 LOGS=os.path.join(DATA_DIR,'logs'); os.makedirs(LOGS,exist_ok=True)
@@ -15,6 +16,10 @@ STARTUP_TIMEOUT=float(os.environ.get('SPREC_RECORDING_START_TIMEOUT','30'))
 STALL_TIMEOUT=float(os.environ.get('SPREC_FFMPEG_STALL_TIMEOUT','45'))
 RECONNECT_DELAY=float(os.environ.get('SPREC_FFMPEG_RECONNECT_DELAY','5'))
 MAX_RECONNECTS=int(os.environ.get('SPREC_FFMPEG_MAX_RECONNECTS','0'))  # 0 = unlimited while recording
+OFFLINE_CONFIRMATIONS=max(2,int(os.environ.get('SPREC_OFFLINE_CONFIRMATIONS','3')))
+OFFLINE_NO_GROWTH_SECONDS=max(5,float(os.environ.get('SPREC_OFFLINE_NO_GROWTH_SECONDS','15')))
+CONVERT_TIMEOUT=max(60,int(os.environ.get('SPREC_CONVERT_TIMEOUT','14400')))
+offline_counts={}
 CHUNK_SIZE=64*1024
 FFMPEG_ERROR_RE=re.compile(r'(?:error|failed|corrupt|non-existing PPS|decode_slice_header|no frame|DTS .*out of order|invalid|I/O error|Connection .* failed)',re.I)
 
@@ -37,11 +42,11 @@ function updateControls(m){const btn=document.querySelector('[data-monitor="'+CS
 function recoverPartials(){fetch('/record/recover').then(r=>r.json()).then(j=>alert(j.recovered&&j.recovered.length?'Récupérés : '+j.recovered.join(', '):'Aucun .ts.part récupérable.')).catch(e=>alert(e.message))}
 function rec(m){fetch('/record/toggle?model='+encodeURIComponent(m),{method:'POST'}).then(r=>r.json()).then(j=>{if(!j.ok)throw Error(j.error);return refreshStatus()}).catch(e=>alert(e.message))}
 function renderManual(){const names=Object.keys(data.manual||{});manualEmpty.style.display=names.length?'none':'block';manualGrid.innerHTML=names.map(m=>{const x=data.manual[m],live=x.online,rec=x.recording,mon=!!players[m];return `<section class="card"><div class="head"><img class="avatar" src="${esc(x.avatar||'')}" onerror="this.style.visibility='hidden'"><div><div class="name">${esc(m)}</div><div class="state ${live?'live':''}" data-state="${esc(m)}">${live?'● EN LIGNE':'○ HORS LIGNE'}${rec?' · ENREGISTREMENT':''}</div></div><div class="spacer"></div><button class="small remove" onclick="removeModel('manual','${esc(m)}')">Supprimer</button></div><div class="videoWrap"><video data-video="${esc(m)}" controls autoplay muted playsinline></video><div class="overlay" data-overlay="${esc(m)}" style="display:${live?'block':'none'}">LIVE</div></div><div class="controls"><button class="small monitor" data-monitor="${esc(m)}" onclick="monitor('${esc(m)}')">${mon?'Arrêter le monitoring':'Monitorer le live'}</button><button class="small record ${rec?'active':''}" data-record="${esc(m)}" onclick="rec('${esc(m)}')">${rec?'Arrêter l’enregistrement':'Enregistrer maintenant'}</button></div><div class="meta" data-meta="${esc(m)}">${x.recording_error?'Erreur: '+esc(x.recording_error):rec?'RECORDING · '+esc(formatBytes(x.bytes))+' · '+esc(formatDuration(x.duration))+' · reconnexions '+esc(x.reconnections):mon?'Monitoring actif':'Prêt.'}</div></section>`}).join('')}
-function renderAuto(){const names=Object.keys(data.auto||{});autoEmpty.style.display=names.length?'none':'block';autoGrid.innerHTML=names.map(m=>{const x=data.auto[m],live=x.online,rec=x.recording;return `<section class="card autoCard"><div class="head" style="padding:0"><img class="avatar" src="${esc(x.avatar||'')}" onerror="this.style.visibility='hidden'"><div><div class="name">${esc(m)}</div><div class="state ${live?'live':''}" data-autostate="${esc(m)}">${live?'● EN LIGNE':'○ HORS LIGNE'}</div></div><div class="spacer"></div><button class="small remove" onclick="removeModel('auto','${esc(m)}')">Supprimer</button></div><div class="autoDesc">${live?(rec?'Enregistrement automatique en cours.':'En ligne — démarrage automatique.'):'Hors ligne — en attente du prochain live.'}</div><div class="autoControls"><button class="small autoRec" onclick="rec('${esc(m)}')">${rec?'Arrêter maintenant':'Enregistrer maintenant'}</button></div><div class="meta" data-autometa="${esc(m)}">${rec?'Fichier: '+esc(x.file):'Surveillance automatique active.'}</div></section>`}).join('')}
+function renderAuto(){const names=Object.keys(data.auto||{});autoEmpty.style.display=names.length?'none':'block';autoGrid.innerHTML=names.map(m=>{const x=data.auto[m],live=x.online,rec=x.recording;return `<section class="card autoCard"><div class="head" style="padding:0"><img class="avatar" src="${esc(x.avatar||'')}" onerror="this.style.visibility='hidden'"><div><div class="name">${esc(m)}</div><div class="state ${live?'live':''}" data-autostate="${esc(m)}">${live?'● EN LIGNE':'○ HORS LIGNE'}</div></div><div class="spacer"></div><button class="small remove" onclick="removeModel('auto','${esc(m)}')">Supprimer</button></div><div class="autoDesc">${live?(rec?'Enregistrement automatique en cours.':'En ligne — démarrage automatique.'):'Hors ligne — en attente du prochain live.'}</div><div class="autoControls"><button class="small autoRec" data-auto-record="${esc(m)}" onclick="rec('${esc(m)}')">${rec?'Arrêter maintenant':'Enregistrer maintenant'}</button></div><div class="meta" data-autometa="${esc(m)}">${rec?'Fichier: '+esc(x.file):'Surveillance automatique active.'}</div></section>`}).join('')}
 function formatBytes(n){n=Number(n||0);const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<4){n/=1024;i++}return n.toFixed(i?1:0)+' '+u[i]}
 function formatDuration(n){n=Math.max(0,Math.floor(Number(n||0)));const h=String(Math.floor(n/3600)).padStart(2,'0'),m=String(Math.floor(n%3600/60)).padStart(2,'0'),s=String(n%60).padStart(2,'0');return h+':'+m+':'+s}
 function updateSummary(){const a=Object.keys(data.manual||{}).length,b=Object.keys(data.auto||{}).length;summary.textContent=(a+b)+' modèle'+(a+b>1?'s':'')+' · '+a+' monitoring · '+b+' auto'}
-function updateStatuses(){Object.keys(data.manual||{}).forEach(m=>{const x=data.manual[m],state=document.querySelector('[data-state="'+CSS.escape(m)+'"]');if(state){state.className='state '+(x.online?'live':'');state.textContent=(x.online?'● EN LIGNE':'○ HORS LIGNE')+(x.recording?' · ENREGISTREMENT':'')}const ov=document.querySelector('[data-overlay="'+CSS.escape(m)+'"]');if(ov)ov.style.display=x.online?'block':'none';updateControls(m);const b=document.querySelector('[data-record="'+CSS.escape(m)+'"]');if(b){b.textContent=x.recording?'Arrêter l’enregistrement':'Enregistrer maintenant';b.className='small record '+(x.recording?'active':'')}const meta=document.querySelector('[data-meta="'+CSS.escape(m)+'"]');if(meta){if(x.recording)meta.textContent='RECORDING · '+formatBytes(x.bytes)+' · '+formatDuration(x.duration)+' · reconnexions '+x.reconnections+' · erreurs FFmpeg '+x.ffmpeg_errors;else if(x.recording_error)meta.textContent='Erreur: '+x.recording_error;else if(x.recording_state==='RECONNECTING')meta.textContent='Reconnexion… '+x.reconnections+' · '+formatBytes(x.bytes);}});Object.keys(data.auto||{}).forEach(m=>{const x=data.auto[m],state=document.querySelector('[data-autostate="'+CSS.escape(m)+'"]');if(state){state.className='state '+(x.online?'live':'');state.textContent=x.online?'● EN LIGNE':'○ HORS LIGNE'}const meta=document.querySelector('[data-autometa="'+CSS.escape(m)+'"]');if(meta)meta.textContent=x.recording?'RECORDING · '+formatBytes(x.bytes)+' · '+formatDuration(x.duration)+' · reconnexions '+x.reconnections+' · erreurs FFmpeg '+x.ffmpeg_errors:(x.recording_error?'Erreur: '+x.recording_error:'Surveillance automatique active.')})}
+function updateStatuses(){Object.keys(data.manual||{}).forEach(m=>{const x=data.manual[m],state=document.querySelector('[data-state="'+CSS.escape(m)+'"]');if(state){state.className='state '+(x.online?'live':'');state.textContent=(x.online?'● EN LIGNE':'○ HORS LIGNE')+(x.recording?' · ENREGISTREMENT':'')}const ov=document.querySelector('[data-overlay="'+CSS.escape(m)+'"]');if(ov)ov.style.display=x.online?'block':'none';updateControls(m);const b=document.querySelector('[data-record="'+CSS.escape(m)+'"]');if(b){b.textContent=(x.recording_state==='CONVERTING'||x.recording_state==='FINALIZING')?'Conversion MP4…':x.recording?'Arrêter l’enregistrement':'Enregistrer maintenant';b.disabled=(x.recording_state==='CONVERTING'||x.recording_state==='FINALIZING');b.className='small record '+(x.recording?'active':'')}const meta=document.querySelector('[data-meta="'+CSS.escape(m)+'"]');if(meta){if(x.recording_state==='CONVERTING'||x.recording_state==='FINALIZING')meta.textContent='FINALISATION / CONVERSION MP4… '+formatBytes(x.bytes);else if(x.recording)meta.textContent='RECORDING · '+formatBytes(x.bytes)+' · '+formatDuration(x.duration)+' · reconnexions '+x.reconnections+' · erreurs FFmpeg '+x.ffmpeg_errors;else if(x.recording_error)meta.textContent='Erreur: '+x.recording_error;else if(x.recording_state==='RECONNECTING')meta.textContent='Reconnexion… '+x.reconnections+' · '+formatBytes(x.bytes);}});Object.keys(data.auto||{}).forEach(m=>{const x=data.auto[m],state=document.querySelector('[data-autostate="'+CSS.escape(m)+'"]');if(state){state.className='state '+(x.online?'live':'');state.textContent=x.online?'● EN LIGNE':'○ HORS LIGNE'}const converting=x.recording_state==='CONVERTING'||x.recording_state==='FINALIZING';const ab=document.querySelector('[data-auto-record="'+CSS.escape(m)+'"]');if(ab){ab.disabled=converting;ab.textContent=converting?'Conversion MP4…':x.recording?'Arrêter maintenant':'Enregistrer maintenant'}const meta=document.querySelector('[data-autometa="'+CSS.escape(m)+'"]');if(meta)meta.textContent=converting?'FINALISATION / CONVERSION MP4… '+formatBytes(x.bytes):x.recording?'RECORDING · '+formatBytes(x.bytes)+' · '+formatDuration(x.duration)+' · reconnexions '+x.reconnections+' · erreurs FFmpeg '+x.ffmpeg_errors:(x.file?'Terminé : '+x.file:(x.recording_error?'Erreur: '+x.recording_error:'Surveillance automatique active.'))})}
 async function refreshStatus(){try{const r=await fetch('/models/status?ts='+Date.now(),{cache:'no-store'}),j=await r.json(),next=j.models||{manual:{},auto:{}};const oldManual=Object.keys(data.manual||{}).sort().join('\n'),oldAuto=Object.keys(data.auto||{}).sort().join('\n'),newManual=Object.keys(next.manual||{}).sort().join('\n'),newAuto=Object.keys(next.auto||{}).sort().join('\n');data=next;if(oldManual!==newManual||oldAuto!==newAuto){renderManual();renderAuto()}updateSummary();updateStatuses()}catch(e){}}
 refreshStatus();setInterval(refreshStatus,5000);
 </script></body></html>
@@ -84,7 +89,7 @@ def all_entries():
     for kind in ('manual','auto'):
         for m in list(models[kind]): yield kind,m
 
-def fetch_stripchat(model):
+def fetch_stripchat(model, strict=False):
     """Get live state + avatar with a few fallbacks.
 
     Stripchat has changed the public API recently; the username/cam endpoint can
@@ -102,7 +107,7 @@ def fetch_stripchat(model):
         'X-Requested-With':'XMLHttpRequest',
         'Cache-Control':'no-cache',
     }
-    online=False; avatar=''; api_ok=False
+    online=False; avatar=''; api_ok=False; response_ok=False
 
     def inspect_obj(obj):
         nonlocal online, avatar, api_ok
@@ -129,6 +134,7 @@ def fetch_stripchat(model):
         u=f'https://stripchat.com/api/front/v2/models/username/{quote(model,safe="")}/cam?uniq={int(time.time()*1000)}'
         req=Request(u,headers=base_headers)
         with urlopen(req,timeout=8) as r: obj=json.loads(r.read().decode('utf-8','replace'))
+        response_ok=True
         inspect_obj(obj)
     except Exception:
         pass
@@ -150,6 +156,7 @@ def fetch_stripchat(model):
                 u=f'https://stripchat.com/api/front/v2/models/{quote(str(mid),safe="")}/cam?uniq={int(time.time()*1000)}'
                 req=Request(u,headers=base_headers)
                 with urlopen(req,timeout=8) as r: obj=json.loads(r.read().decode('utf-8','replace'))
+                response_ok=True
                 inspect_obj(obj)
         except Exception:
             pass
@@ -158,6 +165,7 @@ def fetch_stripchat(model):
     try:
         req=Request('https://stripchat.com/'+quote(model,safe=''),headers={**base_headers,'Accept':'text/html,application/xhtml+xml'})
         with urlopen(req,timeout=10) as r: html=r.read().decode('utf-8','replace')
+        response_ok=True
         if re.search(r'"isLive"\s*:\s*true',html,re.I) or re.search(r'"isCamActive"\s*:\s*true',html,re.I): online=True
         if re.search(r'"status"\s*:\s*"public"',html,re.I) and re.search(r'"isCamAvailable"\s*:\s*true',html,re.I): online=True
         # Avoid a broad 'status=public' match: it is only considered live together
@@ -168,27 +176,54 @@ def fetch_stripchat(model):
     except Exception:
         pass
 
+    if strict and not response_ok:
+        raise RuntimeError('Impossible de vérifier le statut du profil (API et page publique inaccessibles)')
     return online,avatar
 
 
 def monitor_loop():
+    # Poll each username only once even if it appears in both UI lists.
     while True:
-        entries=list(all_entries())
-        for kind,m in entries:
-            try: online,avatar=fetch_stripchat(m)
-            except Exception as e: print('[MONITOR] status failed for',m,e); continue
+        grouped={}
+        for kind,m in list(all_entries()):
+            grouped.setdefault(m,[]).append(kind)
+        for m,kinds in grouped.items():
+            try:
+                online,avatar=fetch_stripchat(m, strict=True)
+            except Exception as e:
+                print('[MONITOR] status failed for',m,e,flush=True)
+                # A failed poll is not counted as an offline confirmation.
+                continue
             with lock:
-                x=models.get(kind,{}).get(m)
-                if not x: continue
-                was=x.get('online',False); x['online']=online
-                if avatar: x['avatar']=avatar
-            if kind=='auto':
-                if online and not was and m not in recordings:
-                    try: start_record(m)
-                    except Exception as e: print('[MONITOR] auto record failed for',m,e)
-                elif not online and was and m in recordings:
-                    try: stop_record(m)
-                    except Exception as e: print('[MONITOR] auto stop failed for',m,e)
+                previous=[models.get(k,{}).get(m,{}).get('online',False) for k in kinds]
+                for kind in kinds:
+                    x=models.get(kind,{}).get(m)
+                    if x is not None:
+                        x['online']=online
+                        if avatar: x['avatar']=avatar
+                if online:
+                    offline_counts[m]=0
+                else:
+                    offline_counts[m]=offline_counts.get(m,0)+1
+                auto_enabled='auto' in kinds
+                rec=recordings.get(m)
+                last_data=(rec.get('last_data') or rec.get('started')) if rec else None
+                offline_confirmed=offline_counts.get(m,0)>=OFFLINE_CONFIRMATIONS
+                no_growth=(last_data is not None and time.time()-last_data>=OFFLINE_NO_GROWTH_SECONDS)
+                should_stop=bool(rec and offline_confirmed and no_growth)
+                should_start=bool(auto_enabled and online and not any(previous) and not rec)
+            if should_start:
+                try:
+                    start_record(m)
+                    print('[MONITOR] auto recording started:',m,flush=True)
+                except Exception as e:
+                    print('[MONITOR] auto record failed for',m,e,flush=True)
+            elif should_stop:
+                try:
+                    print(f'[MONITOR] {m} offline confirmed ({offline_counts.get(m)} polls) and no file growth for {OFFLINE_NO_GROWTH_SECONDS:.0f}s; stopping.',flush=True)
+                    stop_record(m)
+                except Exception as e:
+                    print('[MONITOR] offline auto-stop failed for',m,e,flush=True)
         with lock:
             try: save_models()
             except Exception as e: print('[MONITOR] save failed:',e)
@@ -201,7 +236,7 @@ def snapshot():
             for m,x in models[kind].items():
                 r=recordings.get(m)
                 last=last_results.get(m,{})
-                item={**x,'recording':bool(r and r.get('connected')),'recording_state':r.get('state') if r else last.get('state','IDLE'),
+                item={**x,'recording':bool(r and r.get('state') in ('RECORDING','CONNECTING','RECONNECTING','FINALIZING','CONVERTING')),'recording_state':r.get('state') if r else last.get('state','IDLE'),
                       'file':r.get('file') if r and r.get('file') else last.get('file'),'recording_error':r.get('error') if r else last.get('error'),
                       'recording_reason':r.get('reason') if r else last.get('reason'),'bytes':r.get('bytes_written',last.get('bytes',0)) if r else last.get('bytes',0),
                       'duration':max(0,time.time()-r.get('started',time.time())) if r else last.get('duration',0),
@@ -262,12 +297,12 @@ def _build_ffmpeg_cmd(model, url, output='pipe:1'):
             '-muxpreload','0','-muxdelay','0',
             '-f','mpegts',output]
 
-def _start_ffmpeg(model, rec):
+def _start_ffmpeg(model, rec, output_handle):
     url=rec['url']
     cmd=_build_ffmpeg_cmd(model,url,'pipe:1')
     rec['log'].write(f"[SPRECORDER] FFmpeg command attempt={rec['attempts']+1}: {' '.join(cmd)}\n")
     try:
-        proc=subprocess.Popen(cmd,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,bufsize=0)
+        proc=subprocess.Popen(cmd,stdin=subprocess.DEVNULL,stdout=output_handle,stderr=subprocess.PIPE,bufsize=0)
     except Exception as e:
         rec['error']=f'Impossible de lancer FFmpeg: {e}'
         return None
@@ -284,21 +319,66 @@ def _read_stderr(proc, rec):
     except Exception as e:
         with lock: rec['log'].write(f'[SPRECORDER] stderr reader error: {e}\n')
 
+def _convert_ts_to_mp4(ts_path, mp4_path, log, timeout=None):
+    """Remux a completed TS to MP4 without re-encoding. Keep TS unless MP4 validates."""
+    temp_path=mp4_path+'.part'
+    try:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        cmd=[FFMPEG,'-hide_banner','-loglevel','warning','-nostdin','-y',
+             '-fflags','+discardcorrupt+genpts','-err_detect','ignore_err',
+             '-i',ts_path,'-map','0:v?','-map','0:a?','-c','copy',
+             '-avoid_negative_ts','make_zero','-movflags','+faststart','-f','mp4',temp_path]
+        log.write('[CONVERT] '+ ' '.join(cmd)+'\n')
+        with open(os.devnull,'wb') as devnull:
+            result=subprocess.run(cmd,stdin=subprocess.DEVNULL,stdout=devnull,stderr=subprocess.PIPE,
+                                  timeout=timeout or CONVERT_TIMEOUT,check=False)
+        if result.stderr:
+            log.write(result.stderr.decode('utf-8','replace'))
+        if result.returncode != 0 or not os.path.isfile(temp_path) or os.path.getsize(temp_path)<=0:
+            raise RuntimeError(f'FFmpeg conversion failed (exit={result.returncode})')
+        # Validate container and duration when ffprobe is available. A successful
+        # remux alone is not enough to justify deleting the original TS.
+        if FFPROBE:
+            probe=subprocess.run([FFPROBE,'-v','error','-show_entries','format=duration:stream=codec_type',
+                                  '-of','json',temp_path],stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                                 text=True,timeout=60,check=False)
+            if probe.returncode != 0:
+                raise RuntimeError('ffprobe validation failed: '+(probe.stderr or '')[-500:])
+            info=json.loads(probe.stdout or '{}')
+            streams=info.get('streams') or []
+            duration=float((info.get('format') or {}).get('duration') or 0)
+            if not any(x.get('codec_type')=='video' for x in streams) or duration<=0:
+                raise RuntimeError('MP4 validation failed: no video stream or zero duration')
+        os.replace(temp_path,mp4_path)
+        # Delete the TS only after the MP4 is fully written and validated.
+        os.remove(ts_path)
+        log.write(f'[CONVERT] OK -> {mp4_path}; source TS deleted after validation.\n')
+        return True
+    except Exception as exc:
+        try:
+            if os.path.exists(temp_path): os.remove(temp_path)
+        except OSError:
+            pass
+        log.write(f'[CONVERT] FAILED: {exc}; keeping source TS: {ts_path}\n')
+        return False
+
+
 def _record_worker(model):
     with lock: rec=recordings.get(model)
     if not rec: return
     part=rec['ts']
     try:
         with open(part,'ab',buffering=0) as out:
+            observed_size=os.path.getsize(part) if os.path.exists(part) else 0
             while True:
                 with lock:
                     if rec['stop_requested']:
                         break
-                    attempts=rec['attempts']
                 if MAX_RECONNECTS and rec['reconnects'] >= MAX_RECONNECTS:
                     rec['reason']='Nombre maximal de reconnexions atteint'
                     break
-                proc=_start_ffmpeg(model,rec)
+                proc=_start_ffmpeg(model,rec,out)
                 if proc is None:
                     with lock: rec['state']='RECONNECTING'; rec['connected']=False
                     time.sleep(RECONNECT_DELAY); rec['reconnects'] += 1
@@ -312,47 +392,56 @@ def _record_worker(model):
                     with lock:
                         stopping=rec['stop_requested']
                     if stopping:
-                        _terminate_process(proc); break
-                    try:
-                        ready,_,_=select.select([proc.stdout],[],[],0.5)
-                        chunk=proc.stdout.read(CHUNK_SIZE) if ready else b''
-                    except Exception as e:
-                        with lock: rec['last_ffmpeg_error']=str(e); rec['ffmpeg_errors']+=1
-                        chunk=b''
+                        _terminate_process(proc)
+                        break
                     now=time.monotonic()
-                    if chunk:
-                        out.write(chunk); out.flush()
+                    try:
+                        current_size=os.path.getsize(part)
+                    except OSError:
+                        current_size=observed_size
+                    if current_size > observed_size:
+                        delta=current_size-observed_size
+                        observed_size=current_size
                         with lock:
-                            rec['bytes_written'] += len(chunk)
+                            rec['bytes_written']=current_size
                             rec['last_data']=time.time()
                             if not rec['connected']:
                                 rec['connected']=True
                                 rec['state']='RECORDING'
                                 rec['first_data_at']=time.time()
-                                rec['log'].write('[SPRECORDER] RECORDING confirmed: FFmpeg produced data.\n')
-                        got_data=True; last_data=now
+                                rec['log'].write('[SPRECORDER] RECORDING confirmed: output file is growing.\n')
+                        got_data=True
+                        last_data=now
                         if time.time()-rec.get('last_stats_log',rec['started']) >= 30:
                             with lock:
                                 rec['last_stats_log']=time.time()
-                                rec['log'].write(f"[SPRECORDER] stats bytes={rec['bytes_written']} duration={_human_duration(time.time()-rec['started'])} reconnects={rec['reconnects']} ffmpeg_errors={rec['ffmpeg_errors']}\n")
-                        continue
+                                rec['log'].write(f"[SPRECORDER] stats bytes={current_size} duration={_human_duration(time.time()-rec['started'])} reconnects={rec['reconnects']} ffmpeg_errors={rec['ffmpeg_errors']}\n")
                     rc=proc.poll()
-                    if rc is not None: break
+                    if rc is not None:
+                        break
                     if not got_data and now >= first_data_deadline:
                         with lock:
                             rec['reason']='FFmpeg démarré mais aucune donnée reçue dans le délai de démarrage'
                             rec['log'].write('[SPRECORDER] Startup timeout: no output data. Reconnecting.\n')
-                        _terminate_process(proc); break
+                        _terminate_process(proc)
+                        break
                     if got_data and now-last_data >= STALL_TIMEOUT:
                         with lock:
                             rec['reason']=f'Flux FFmpeg bloqué depuis {STALL_TIMEOUT:.0f}s'
                             rec['log'].write(f'[SPRECORDER] Stall detected after {STALL_TIMEOUT:.0f}s without data. Reconnecting.\n')
-                        _terminate_process(proc); break
-                    time.sleep(0.2)
+                        _terminate_process(proc)
+                        break
+                    time.sleep(0.5)
                 rc=proc.poll()
+                try:
+                    final_size=os.path.getsize(part)
+                    if final_size > observed_size:
+                        observed_size=final_size
+                    with lock:
+                        rec['bytes_written']=final_size
+                except OSError:
+                    pass
                 stderr_thread.join(timeout=2)
-                try: proc.stdout.close()
-                except Exception: pass
                 try: proc.stderr.close()
                 except Exception: pass
                 with lock:
@@ -368,7 +457,6 @@ def _record_worker(model):
                     rec['reason']=reason
                     rec['log'].write(f'[SPRECORDER] FFmpeg disconnected: {reason}; reconnect #{rec["reconnects"]}.\n')
                 time.sleep(RECONNECT_DELAY)
-        # Worker only reaches here after requested stop or terminal condition.
         with lock:
             normal=rec['stop_requested'] and rec['bytes_written']>0
             rec['connected']=False
@@ -376,10 +464,23 @@ def _record_worker(model):
             if not normal and not rec.get('reason'): rec['reason']='Enregistrement interrompu sans arrêt normal'
         if normal:
             os.replace(part,rec['final'])
+            mp4_final=os.path.splitext(rec['final'])[0]+'.mp4'
             with lock:
+                rec['state']='CONVERTING'
                 rec['file']=os.path.basename(rec['final'])
-                rec['state']='IDLE'; rec['finished_at']=time.time(); rec['reason']='Arrêt normal; fichier .ts finalisé atomiquement'
-                rec['log'].write(f"[SPRECORDER] NORMAL STOP bytes={rec['bytes_written']} duration={_human_duration(time.time()-rec['started'])} -> {rec['final']}\n")
+                rec['mp4_file']=os.path.basename(mp4_final)
+                rec['log'].write(f"[SPRECORDER] TS finalized; starting MP4 remux -> {mp4_final}\n")
+            converted=_convert_ts_to_mp4(rec['final'],mp4_final,rec['log'])
+            with lock:
+                if converted:
+                    rec['file']=os.path.basename(mp4_final)
+                    rec['state']='IDLE'; rec['finished_at']=time.time()
+                    rec['reason']='MP4 créé et validé; TS source supprimé'
+                    rec['log'].write(f"[SPRECORDER] COMPLETE bytes={rec['bytes_written']} duration={_human_duration(time.time()-rec['started'])} -> {mp4_final}\n")
+                else:
+                    rec['file']=os.path.basename(rec['final'])
+                    rec['state']='ERROR'; rec['error']='Conversion MP4 impossible; le fichier TS original a été conservé'
+                    rec['reason']=rec['error']
         else:
             with lock:
                 rec['error']=rec.get('reason') or 'FFmpeg arrêté; .ts.part conservé'
@@ -396,10 +497,9 @@ def _record_worker(model):
         except Exception: pass
         with lock:
             rec['proc']=None
-            # Keep failed/reconnecting records visible; remove only after successful finalization.
             if rec.get('state') in ('IDLE','ERROR'):
                 last_results[model]={
-                    'state':rec.get('state'),'file':rec.get('file'),'error':rec.get('error'),'reason':rec.get('reason'),
+                    'state':rec.get('state'),'file':rec.get('file'),'mp4_file':rec.get('mp4_file'),'error':rec.get('error'),'reason':rec.get('reason'),
                     'bytes':rec.get('bytes_written',0),'duration':max(0,time.time()-rec.get('started',time.time())),
                     'reconnections':rec.get('reconnects',0),'ffmpeg_errors':rec.get('ffmpeg_errors',0)
                 }
@@ -435,7 +535,7 @@ def start_record(model):
         last_results.pop(model,None)
         recordings[model]=rec
     threading.Thread(target=_record_worker,args=(model,),name=f'recorder-{model}',daemon=True).start()
-    return base+'.ts'
+    return base+'.mp4'
 
 def stop_record(model):
     model=safe_model(model)
@@ -446,10 +546,10 @@ def stop_record(model):
         rec['reason']='Arrêt demandé par l’utilisateur'
         proc=rec.get('proc')
     if proc: _terminate_process(proc)
-    deadline=time.time()+35
+    deadline=time.time()+CONVERT_TIMEOUT+60
     while time.time()<deadline:
         with lock:
-            if model not in recordings: return os.path.basename(rec['final'])
+            if model not in recordings: return rec.get('file') or os.path.basename(rec['final'])
             state=rec.get('state')
             if state=='ERROR': raise RuntimeError(rec.get('error') or 'Enregistrement interrompu; .ts.part conservé')
         time.sleep(.25)
@@ -494,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
                 kind=kind_name(kind); m=safe_model(m)
                 with lock:
                     if m not in models[kind]: models[kind][m]={'avatar':'','online':False};save_models()
-                online,avatar=fetch_stripchat(m)
+                online,avatar=fetch_stripchat(m, strict=True)
                 with lock:
                     if m in models[kind]: models[kind][m].update({'online':online,'avatar':avatar or models[kind][m].get('avatar','')});save_models()
                 if kind=='auto' and online and m not in recordings: start_record(m)
