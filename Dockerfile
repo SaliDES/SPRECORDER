@@ -1,11 +1,11 @@
-FROM --platform=linux/amd64 rust:1-bookworm AS chantrail-build
+FROM rust:1-bookworm AS chantrail-build
 RUN apt-get update && apt-get install -y --no-install-recommends git pkg-config libssl-dev ca-certificates file && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 RUN git clone --depth 1 https://github.com/ChanTrail/StripchatRecorder.git
 WORKDIR /src/StripchatRecorder/backend
 RUN cargo build --release
 
-FROM --platform=linux/amd64 python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 \
     LD_PRELOAD= \
     SPREC_HOST=0.0.0.0 \
