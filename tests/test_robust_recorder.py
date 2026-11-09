@@ -104,6 +104,26 @@ exit 1
             self.mod.start_record("A")
         self.mod.stop_record("A")
 
+    def test_library_lists_ts_and_manual_conversion_keeps_source(self):
+        recdir = Path(self.tmp / "data" / "recordings")
+        recdir.mkdir(parents=True, exist_ok=True)
+        ts = recdir / "older_show.ts"
+        ts.write_bytes(b"synthetic transport stream")
+        listed = self.mod.list_recordings()
+        self.assertTrue(any(x["name"] == ts.name for x in listed))
+        mp4 = ts.with_suffix(".mp4")
+        log_path = Path(self.tmp / "data" / "logs" / "manual-convert.log")
+        with log_path.open("w") as log:
+            ok = self.mod._convert_ts_to_mp4(str(ts), str(mp4), log, delete_source=False)
+        self.assertTrue(ok)
+        self.assertTrue(ts.exists(), "manual conversion must preserve the TS by default")
+        self.assertTrue(mp4.exists())
+        self.assertGreater(mp4.stat().st_size, 0)
+
+    def test_library_rejects_path_traversal(self):
+        with self.assertRaises(ValueError):
+            self.mod._safe_recording_path("../models.json")
+
     def test_recovery_creates_recovered_file(self):
         # Build a small valid TS using the system ffmpeg if available.
         if shutil.which("ffmpeg") is None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, signal, subprocess, threading, time, re, platform, shutil, traceback
+import json, os, signal, subprocess, threading, time, re, platform, shutil, traceback, select
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, quote
 from urllib.request import Request, urlopen
@@ -25,14 +25,15 @@ FFMPEG_ERROR_RE=re.compile(r'(?:error|failed|corrupt|non-existing PPS|decode_sli
 
 PAGE=r'''<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SPRECORDER</title><script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.8.0/dist/mpegts.min.js"></script><style>
 *{box-sizing:border-box}body{margin:0;background:#0f1115;color:#eee;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}main{max-width:1450px;margin:24px auto;padding:0 18px}.top{display:flex;align-items:center;justify-content:space-between}.tabs{display:flex;gap:8px;margin:22px 0 18px}.tab{padding:10px 16px;border:1px solid #333842;background:#191c23;color:#bbb;border-radius:9px;cursor:pointer;font-weight:700}.tab.active{background:#3498db;color:#fff;border-color:#3498db}.panel{display:none}.panel.active{display:block}.top h1{margin:0}.add{display:flex;gap:8px;margin:14px 0}.add input{flex:1;min-width:220px;padding:12px;border-radius:9px;border:1px solid #3a3d45;background:#1b1e25;color:#fff;font-size:15px}.add button,.small{padding:10px 14px;border:0;border-radius:8px;cursor:pointer;font-weight:600}.add button{background:#2ecc71}.summary{color:#aaa;margin:8px 0 18px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:18px}.autoGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}.card{background:#171a21;border:1px solid #2c3039;border-radius:14px;overflow:hidden;box-shadow:0 5px 18px #0004}.head{display:flex;align-items:center;gap:12px;padding:12px 14px}.avatar{width:52px;height:52px;border-radius:50%;object-fit:cover;background:#292d35;border:2px solid #363b46}.name{font-weight:700;font-size:17px}.state{font-size:13px;color:#999;margin-top:3px}.state.live{color:#2ecc71}.spacer{flex:1}.remove{background:#2a2e36;color:#bbb}.videoWrap{position:relative;background:#000}.videoWrap video{display:block;width:100%;aspect-ratio:16/9;background:#000}.overlay{position:absolute;left:10px;top:10px;background:#000b;padding:5px 8px;border-radius:7px;font-size:12px}.controls{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px}.monitor{background:#3498db;color:white}.record{background:#e67e22;color:#fff}.record.active{background:#c0392b}.autoRec{background:#8e44ad;color:#fff}.meta{padding:0 14px 12px;color:#8d929d;font-size:12px;min-height:18px}.autoCard{padding:15px}.autoControls{display:flex;gap:8px;align-items:center;margin-top:14px}.autoDesc{color:#9ca1ab;font-size:13px;line-height:1.45;margin-top:8px}.empty{padding:50px 20px;text-align:center;color:#777;border:1px dashed #343842;border-radius:12px}.hint{color:#777;font-size:12px;margin-top:14px}.sectionTitle{font-size:20px;font-weight:700}.sectionDesc{color:#999;margin:6px 0 16px}@media(max-width:520px){.grid,.autoGrid{grid-template-columns:1fr}.card{min-width:0}}
-</style></head><body><main><div class="top"><h1>SPRECORDER</h1><div id="summary" class="summary"></div></div><div class="tabs"><button class="small" style="background:#444;color:#fff" onclick="recoverPartials()">Récupérer les .ts.part</button><button class="tab active" data-tab="manual" onclick="switchTab('manual')">Monitoring</button><button class="tab" data-tab="auto" onclick="switchTab('auto')">Enregistrement automatique</button></div>
+</style></head><body><main><div class="top"><h1>SPRECORDER</h1><div id="summary" class="summary"></div></div><div class="tabs"><button class="small" style="background:#444;color:#fff" onclick="recoverPartials()">Récupérer les .ts.part</button><button class="tab active" data-tab="manual" onclick="switchTab('manual')">Monitoring</button><button class="tab" data-tab="auto" onclick="switchTab('auto')">Enregistrement automatique</button><button class="tab" data-tab="library" onclick="switchTab('library');refreshLibrary()">Bibliothèque</button></div>
 <section id="manualPanel" class="panel active"><div class="sectionTitle">Monitoring manuel</div><div class="sectionDesc">Ajoute tes modèles, surveille chaque live indépendamment et lance ou arrête l'enregistrement quand tu le souhaites.</div><div class="add"><input id="newModel" placeholder="Ajouter un modèle, ex: MasonxHer" autocomplete="off"><button onclick="addModel('manual')">+ Ajouter</button></div><div id="manualGrid" class="grid"></div><div id="manualEmpty" class="empty">Ajoute un ou plusieurs modèles pour commencer.</div></section>
 <section id="autoPanel" class="panel"><div class="sectionTitle">Enregistrement automatique</div><div class="sectionDesc">Les modèles placés ici sont surveillés en permanence. Dès qu'un modèle passe en ligne, SPRECORDER démarre automatiquement l'enregistrement. Lorsqu'il repasse hors ligne, le MP4 est finalisé.</div><div class="add"><input id="newAutoModel" placeholder="Ajouter un modèle à enregistrer automatiquement" autocomplete="off"><button onclick="addModel('auto')">+ Ajouter</button></div><div id="autoGrid" class="autoGrid"></div><div id="autoEmpty" class="empty">Aucun modèle en enregistrement automatique.</div></section>
-<div class="hint">Le backend original ChanTrail reste responsable du relay, du HLS et de la résolution Stripchat. Les deux listes sont indépendantes.</div></main><script>
+<section id="libraryPanel" class="panel"><div class="sectionTitle">Bibliothèque des enregistrements</div><div class="sectionDesc">Historique des vidéos dans /data/recordings. Les conversions manuelles conservent le .ts par défaut : tu peux choisir de le supprimer après validation du MP4.</div><div class="controls" style="padding-left:0"><button class="small monitor" onclick="refreshLibrary()">Actualiser</button><label style="display:flex;gap:8px;align-items:center;color:#aaa"><input id="deleteTsAfterConvert" type="checkbox"> Supprimer le .ts après conversion réussie</label></div><div id="libraryList" class="autoGrid"></div><div id="libraryEmpty" class="empty" style="display:none">Aucun enregistrement trouvé.</div></section>
+<div class="hint">Les listes de modèles et la bibliothèque sont indépendantes. Les fichiers .part en cours ne sont jamais proposés à la suppression.</div></main><script>
 const manualGrid=document.getElementById('manualGrid'),autoGrid=document.getElementById('autoGrid'),manualEmpty=document.getElementById('manualEmpty'),autoEmpty=document.getElementById('autoEmpty'),summary=document.getElementById('summary'),newModel=document.getElementById('newModel'),newAutoModel=document.getElementById('newAutoModel');const players={};let data={manual:{},auto:{}};
 [newModel,newAutoModel].forEach((i,idx)=>i.addEventListener('keydown',e=>{if(e.key==='Enter')addModel(idx?'auto':'manual')}));
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function switchTab(t){document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));document.getElementById('manualPanel').classList.toggle('active',t==='manual');document.getElementById('autoPanel').classList.toggle('active',t==='auto')}
+function switchTab(t){document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));['manual','auto','library'].forEach(k=>document.getElementById(k+'Panel').classList.toggle('active',k===t))}
 function addModel(kind){const input=kind==='auto'?newAutoModel:newModel,m=input.value.trim();if(!m)return;fetch('/models/add?kind='+kind+'&model='+encodeURIComponent(m),{method:'POST'}).then(r=>r.json()).then(j=>{if(!j.ok)throw Error(j.error);input.value='';refreshStatus()}).catch(e=>alert(e.message))}
 function removeModel(kind,m){if(!confirm('Supprimer '+m+' de cette liste ?'))return;if(kind==='manual')stopMonitor(m);fetch('/models/remove?kind='+kind+'&model='+encodeURIComponent(m),{method:'POST'}).then(r=>r.json()).then(j=>{if(!j.ok)throw Error(j.error);refreshStatus()}).catch(e=>alert(e.message))}
 function monitor(m){if(players[m]){stopMonitor(m);return}const video=document.querySelector('[data-video="'+CSS.escape(m)+'"]');if(!video||!window.mpegts||!mpegts.isSupported()){alert('Le lecteur mpegts.js n’est pas disponible.');return}const url=(location.protocol==='https:'?'https://':'http://')+location.hostname+':3030/stream/'+encodeURIComponent(m);const p=mpegts.createPlayer({type:'mpegts',isLive:true,url:url},{enableWorker:false,liveBufferLatencyChasing:true,liveBufferLatencyMaxLatency:1.5,liveBufferLatencyMinRemain:.3});p.on(mpegts.Events.ERROR,(t,d)=>setMeta(m,'Erreur lecteur: '+t+' / '+d));p.attachMediaElement(video);p.load();p.play().catch(()=>{});players[m]=p;setMeta(m,'Monitoring actif');updateControls(m)}
@@ -43,6 +44,11 @@ function recoverPartials(){fetch('/record/recover').then(r=>r.json()).then(j=>al
 function rec(m){fetch('/record/toggle?model='+encodeURIComponent(m),{method:'POST'}).then(r=>r.json()).then(j=>{if(!j.ok)throw Error(j.error);return refreshStatus()}).catch(e=>alert(e.message))}
 function renderManual(){const names=Object.keys(data.manual||{});manualEmpty.style.display=names.length?'none':'block';manualGrid.innerHTML=names.map(m=>{const x=data.manual[m],live=x.online,rec=x.recording,mon=!!players[m];return `<section class="card"><div class="head"><img class="avatar" src="${esc(x.avatar||'')}" onerror="this.style.visibility='hidden'"><div><div class="name">${esc(m)}</div><div class="state ${live?'live':''}" data-state="${esc(m)}">${live?'● EN LIGNE':'○ HORS LIGNE'}${rec?' · ENREGISTREMENT':''}</div></div><div class="spacer"></div><button class="small remove" onclick="removeModel('manual','${esc(m)}')">Supprimer</button></div><div class="videoWrap"><video data-video="${esc(m)}" controls autoplay muted playsinline></video><div class="overlay" data-overlay="${esc(m)}" style="display:${live?'block':'none'}">LIVE</div></div><div class="controls"><button class="small monitor" data-monitor="${esc(m)}" onclick="monitor('${esc(m)}')">${mon?'Arrêter le monitoring':'Monitorer le live'}</button><button class="small record ${rec?'active':''}" data-record="${esc(m)}" onclick="rec('${esc(m)}')">${rec?'Arrêter l’enregistrement':'Enregistrer maintenant'}</button></div><div class="meta" data-meta="${esc(m)}">${x.recording_error?'Erreur: '+esc(x.recording_error):rec?'RECORDING · '+esc(formatBytes(x.bytes))+' · '+esc(formatDuration(x.duration))+' · reconnexions '+esc(x.reconnections):mon?'Monitoring actif':'Prêt.'}</div></section>`}).join('')}
 function renderAuto(){const names=Object.keys(data.auto||{});autoEmpty.style.display=names.length?'none':'block';autoGrid.innerHTML=names.map(m=>{const x=data.auto[m],live=x.online,rec=x.recording;return `<section class="card autoCard"><div class="head" style="padding:0"><img class="avatar" src="${esc(x.avatar||'')}" onerror="this.style.visibility='hidden'"><div><div class="name">${esc(m)}</div><div class="state ${live?'live':''}" data-autostate="${esc(m)}">${live?'● EN LIGNE':'○ HORS LIGNE'}</div></div><div class="spacer"></div><button class="small remove" onclick="removeModel('auto','${esc(m)}')">Supprimer</button></div><div class="autoDesc">${live?(rec?'Enregistrement automatique en cours.':'En ligne — démarrage automatique.'):'Hors ligne — en attente du prochain live.'}</div><div class="autoControls"><button class="small autoRec" data-auto-record="${esc(m)}" onclick="rec('${esc(m)}')">${rec?'Arrêter maintenant':'Enregistrer maintenant'}</button></div><div class="meta" data-autometa="${esc(m)}">${rec?'Fichier: '+esc(x.file):'Surveillance automatique active.'}</div></section>`}).join('')}
+
+async function refreshLibrary(){const box=document.getElementById('libraryList'),empty=document.getElementById('libraryEmpty');box.innerHTML='<div class="summary">Chargement…</div>';try{const r=await fetch('/recordings/list?ts='+Date.now(),{cache:'no-store'}),j=await r.json();if(!j.ok)throw Error(j.error||'Erreur');const files=j.files||[];empty.style.display=files.length?'none':'block';box.innerHTML=files.map(f=>{const name=esc(f.name),isTs=f.name.toLowerCase().endsWith('.ts'),isMp4=f.name.toLowerCase().endsWith('.mp4');return `<article class="card autoCard"><div class="name">${name}</div><div class="autoDesc">${formatBytes(f.size)} · ${new Date(f.mtime*1000).toLocaleString('fr-FR')}</div><div class="autoControls">${isMp4?`<a class="small monitor" style="text-decoration:none" href="/recordings/play?name=${encodeURIComponent(f.name)}" target="_blank">Lire / ouvrir</a>`:''}${isTs?`<button class="small autoRec" onclick="convertRecording('${name}')">Convertir en MP4</button>`:''}<button class="small remove" onclick="deleteRecording('${name}')">Supprimer</button></div></article>`}).join('')}catch(e){box.innerHTML='<div class="empty">'+esc(e.message)+'</div>'}}
+async function convertRecording(name){const del=document.getElementById('deleteTsAfterConvert').checked;if(!confirm('Convertir '+name+' en MP4 ?'+(del?' Le TS sera supprimé uniquement si le MP4 est validé.':' Le TS original sera conservé.')))return;try{const r=await fetch('/recordings/convert?name='+encodeURIComponent(name)+'&delete='+ (del?'1':'0'),{method:'POST'}),j=await r.json();if(!j.ok)throw Error(j.error);alert('Conversion terminée : '+j.mp4);refreshLibrary()}catch(e){alert('Conversion impossible : '+e.message)}}
+async function deleteRecording(name){if(!confirm('Supprimer définitivement '+name+' ?'))return;try{const r=await fetch('/recordings/delete?name='+encodeURIComponent(name),{method:'POST'}),j=await r.json();if(!j.ok)throw Error(j.error);refreshLibrary()}catch(e){alert('Suppression impossible : '+e.message)}}
+
 function formatBytes(n){n=Number(n||0);const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<4){n/=1024;i++}return n.toFixed(i?1:0)+' '+u[i]}
 function formatDuration(n){n=Math.max(0,Math.floor(Number(n||0)));const h=String(Math.floor(n/3600)).padStart(2,'0'),m=String(Math.floor(n%3600/60)).padStart(2,'0'),s=String(n%60).padStart(2,'0');return h+':'+m+':'+s}
 function updateSummary(){const a=Object.keys(data.manual||{}).length,b=Object.keys(data.auto||{}).length;summary.textContent=(a+b)+' modèle'+(a+b>1?'s':'')+' · '+a+' monitoring · '+b+' auto'}
@@ -297,12 +303,12 @@ def _build_ffmpeg_cmd(model, url, output='pipe:1'):
             '-muxpreload','0','-muxdelay','0',
             '-f','mpegts',output]
 
-def _start_ffmpeg(model, rec, output_handle):
+def _start_ffmpeg(model, rec):
     url=rec['url']
     cmd=_build_ffmpeg_cmd(model,url,'pipe:1')
     rec['log'].write(f"[SPRECORDER] FFmpeg command attempt={rec['attempts']+1}: {' '.join(cmd)}\n")
     try:
-        proc=subprocess.Popen(cmd,stdin=subprocess.DEVNULL,stdout=output_handle,stderr=subprocess.PIPE,bufsize=0)
+        proc=subprocess.Popen(cmd,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,bufsize=0)
     except Exception as e:
         rec['error']=f'Impossible de lancer FFmpeg: {e}'
         return None
@@ -319,7 +325,7 @@ def _read_stderr(proc, rec):
     except Exception as e:
         with lock: rec['log'].write(f'[SPRECORDER] stderr reader error: {e}\n')
 
-def _convert_ts_to_mp4(ts_path, mp4_path, log, timeout=None):
+def _convert_ts_to_mp4(ts_path, mp4_path, log, timeout=None, delete_source=True):
     """Remux a completed TS to MP4 without re-encoding. Keep TS unless MP4 validates."""
     temp_path=mp4_path+'.part'
     try:
@@ -352,8 +358,11 @@ def _convert_ts_to_mp4(ts_path, mp4_path, log, timeout=None):
                 raise RuntimeError('MP4 validation failed: no video stream or zero duration')
         os.replace(temp_path,mp4_path)
         # Delete the TS only after the MP4 is fully written and validated.
-        os.remove(ts_path)
-        log.write(f'[CONVERT] OK -> {mp4_path}; source TS deleted after validation.\n')
+        if delete_source:
+            os.remove(ts_path)
+            log.write(f'[CONVERT] OK -> {mp4_path}; source TS deleted after validation.\n')
+        else:
+            log.write(f'[CONVERT] OK -> {mp4_path}; source TS retained.\n')
         return True
     except Exception as exc:
         try:
@@ -369,128 +378,96 @@ def _record_worker(model):
     if not rec: return
     part=rec['ts']
     try:
+        # Keep the original, proven capture path: read FFmpeg stdout in chunks and
+        # write/flush them ourselves. Do not redirect FFmpeg stdout straight to the
+        # destination file; explicit reads let us detect first bytes and stalls.
         with open(part,'ab',buffering=0) as out:
-            observed_size=os.path.getsize(part) if os.path.exists(part) else 0
             while True:
                 with lock:
-                    if rec['stop_requested']:
-                        break
+                    if rec['stop_requested']: break
                 if MAX_RECONNECTS and rec['reconnects'] >= MAX_RECONNECTS:
-                    rec['reason']='Nombre maximal de reconnexions atteint'
-                    break
-                proc=_start_ffmpeg(model,rec,out)
+                    rec['reason']='Nombre maximal de reconnexions atteint'; break
+                proc=_start_ffmpeg(model,rec)
                 if proc is None:
                     with lock: rec['state']='RECONNECTING'; rec['connected']=False
-                    time.sleep(RECONNECT_DELAY); rec['reconnects'] += 1
-                    continue
-                stderr_thread=threading.Thread(target=_read_stderr,args=(proc,rec),daemon=True)
-                stderr_thread.start()
-                first_data_deadline=time.monotonic()+STARTUP_TIMEOUT
-                last_data=time.monotonic()
-                got_data=False
+                    time.sleep(RECONNECT_DELAY); rec['reconnects']+=1; continue
+                stderr_thread=threading.Thread(target=_read_stderr,args=(proc,rec),daemon=True); stderr_thread.start()
+                first_data_deadline=time.monotonic()+STARTUP_TIMEOUT; last_data=time.monotonic(); got_data=False
                 while True:
-                    with lock:
-                        stopping=rec['stop_requested']
+                    with lock: stopping=rec['stop_requested']
                     if stopping:
-                        _terminate_process(proc)
-                        break
-                    now=time.monotonic()
+                        _terminate_process(proc); break
                     try:
-                        current_size=os.path.getsize(part)
-                    except OSError:
-                        current_size=observed_size
-                    if current_size > observed_size:
-                        delta=current_size-observed_size
-                        observed_size=current_size
+                        ready,_,_=select.select([proc.stdout],[],[],0.5)
+                        chunk=proc.stdout.read(CHUNK_SIZE) if ready else b''
+                    except Exception as e:
+                        with lock: rec['last_ffmpeg_error']=str(e); rec['ffmpeg_errors']+=1
+                        chunk=b''
+                    now=time.monotonic()
+                    if chunk:
+                        out.write(chunk); out.flush()
                         with lock:
-                            rec['bytes_written']=current_size
-                            rec['last_data']=time.time()
+                            rec['bytes_written']+=len(chunk); rec['last_data']=time.time()
                             if not rec['connected']:
-                                rec['connected']=True
-                                rec['state']='RECORDING'
-                                rec['first_data_at']=time.time()
-                                rec['log'].write('[SPRECORDER] RECORDING confirmed: output file is growing.\n')
-                        got_data=True
-                        last_data=now
-                        if time.time()-rec.get('last_stats_log',rec['started']) >= 30:
+                                rec['connected']=True; rec['state']='RECORDING'; rec['first_data_at']=time.time()
+                                rec['log'].write('[SPRECORDER] RECORDING confirmed: FFmpeg produced data.\n')
+                        got_data=True; last_data=now
+                        if time.time()-rec.get('last_stats_log',rec['started'])>=30:
                             with lock:
                                 rec['last_stats_log']=time.time()
-                                rec['log'].write(f"[SPRECORDER] stats bytes={current_size} duration={_human_duration(time.time()-rec['started'])} reconnects={rec['reconnects']} ffmpeg_errors={rec['ffmpeg_errors']}\n")
+                                rec['log'].write(f"[SPRECORDER] stats bytes={rec['bytes_written']} duration={_human_duration(time.time()-rec['started'])} reconnects={rec['reconnects']} ffmpeg_errors={rec['ffmpeg_errors']}\n")
+                        continue
                     rc=proc.poll()
-                    if rc is not None:
-                        break
-                    if not got_data and now >= first_data_deadline:
+                    if rc is not None: break
+                    if not got_data and now>=first_data_deadline:
                         with lock:
                             rec['reason']='FFmpeg démarré mais aucune donnée reçue dans le délai de démarrage'
                             rec['log'].write('[SPRECORDER] Startup timeout: no output data. Reconnecting.\n')
-                        _terminate_process(proc)
-                        break
-                    if got_data and now-last_data >= STALL_TIMEOUT:
+                        _terminate_process(proc); break
+                    if got_data and now-last_data>=STALL_TIMEOUT:
                         with lock:
                             rec['reason']=f'Flux FFmpeg bloqué depuis {STALL_TIMEOUT:.0f}s'
                             rec['log'].write(f'[SPRECORDER] Stall detected after {STALL_TIMEOUT:.0f}s without data. Reconnecting.\n')
-                        _terminate_process(proc)
-                        break
-                    time.sleep(0.5)
-                rc=proc.poll()
-                try:
-                    final_size=os.path.getsize(part)
-                    if final_size > observed_size:
-                        observed_size=final_size
-                    with lock:
-                        rec['bytes_written']=final_size
-                except OSError:
-                    pass
-                stderr_thread.join(timeout=2)
+                        _terminate_process(proc); break
+                rc=proc.poll(); stderr_thread.join(timeout=2)
+                try: proc.stdout.close()
+                except Exception: pass
                 try: proc.stderr.close()
                 except Exception: pass
                 with lock:
                     rec['proc']=None
                     if rec['stop_requested']:
-                        rec['reason']=rec.get('reason') or 'Arrêt demandé par l’utilisateur'
-                        break
-                    rec['connected']=False
-                    rec['state']='RECONNECTING'
-                    rec['last_exit_code']=rc
-                    rec['reconnects'] += 1
-                    reason=rec.get('reason') or f'FFmpeg s’est arrêté (code {rc})'
-                    rec['reason']=reason
+                        rec['reason']=rec.get('reason') or 'Arrêt demandé par l’utilisateur'; break
+                    rec['connected']=False; rec['state']='RECONNECTING'; rec['last_exit_code']=rc; rec['reconnects']+=1
+                    reason=rec.get('reason') or f'FFmpeg s’est arrêté (code {rc})'; rec['reason']=reason
                     rec['log'].write(f'[SPRECORDER] FFmpeg disconnected: {reason}; reconnect #{rec["reconnects"]}.\n')
                 time.sleep(RECONNECT_DELAY)
         with lock:
             normal=rec['stop_requested'] and rec['bytes_written']>0
-            rec['connected']=False
-            rec['state']='FINALIZING' if normal else 'ERROR'
+            rec['connected']=False; rec['state']='FINALIZING' if normal else 'ERROR'
             if not normal and not rec.get('reason'): rec['reason']='Enregistrement interrompu sans arrêt normal'
         if normal:
             os.replace(part,rec['final'])
             mp4_final=os.path.splitext(rec['final'])[0]+'.mp4'
             with lock:
-                rec['state']='CONVERTING'
-                rec['file']=os.path.basename(rec['final'])
-                rec['mp4_file']=os.path.basename(mp4_final)
-                rec['log'].write(f"[SPRECORDER] TS finalized; starting MP4 remux -> {mp4_final}\n")
-            converted=_convert_ts_to_mp4(rec['final'],mp4_final,rec['log'])
+                rec['state']='CONVERTING'; rec['file']=os.path.basename(rec['final']); rec['mp4_file']=os.path.basename(mp4_final)
+                rec['log'].write(f'[SPRECORDER] TS finalized; starting MP4 remux -> {mp4_final}\n')
+            converted=_convert_ts_to_mp4(rec['final'],mp4_final,rec['log'],delete_source=True)
             with lock:
                 if converted:
-                    rec['file']=os.path.basename(mp4_final)
-                    rec['state']='IDLE'; rec['finished_at']=time.time()
+                    rec['file']=os.path.basename(mp4_final); rec['state']='IDLE'; rec['finished_at']=time.time()
                     rec['reason']='MP4 créé et validé; TS source supprimé'
                     rec['log'].write(f"[SPRECORDER] COMPLETE bytes={rec['bytes_written']} duration={_human_duration(time.time()-rec['started'])} -> {mp4_final}\n")
                 else:
-                    rec['file']=os.path.basename(rec['final'])
-                    rec['state']='ERROR'; rec['error']='Conversion MP4 impossible; le fichier TS original a été conservé'
-                    rec['reason']=rec['error']
+                    rec['file']=os.path.basename(rec['final']); rec['state']='ERROR'
+                    rec['error']='Conversion MP4 impossible; le fichier TS original a été conservé'; rec['reason']=rec['error']
         else:
             with lock:
-                rec['error']=rec.get('reason') or 'FFmpeg arrêté; .ts.part conservé'
-                rec['state']='ERROR'
+                rec['error']=rec.get('reason') or 'FFmpeg arrêté; .ts.part conservé'; rec['state']='ERROR'
                 rec['log'].write(f"[SPRECORDER] FAILED bytes={rec['bytes_written']} duration={_human_duration(time.time()-rec['started'])} reason={rec['error']} -- keeping {part}\n")
     except Exception as e:
         with lock:
-            rec['error']=f'Erreur recorder: {e}'
-            rec['reason']=rec['error']
-            rec['state']='ERROR'; rec['connected']=False
+            rec['error']=f'Erreur recorder: {e}'; rec['reason']=rec['error']; rec['state']='ERROR'; rec['connected']=False
             rec['log'].write('[SPRECORDER] Worker exception: '+traceback.format_exc()+'\n')
     finally:
         try: rec['log'].flush(); rec['log'].close()
@@ -498,11 +475,9 @@ def _record_worker(model):
         with lock:
             rec['proc']=None
             if rec.get('state') in ('IDLE','ERROR'):
-                last_results[model]={
-                    'state':rec.get('state'),'file':rec.get('file'),'mp4_file':rec.get('mp4_file'),'error':rec.get('error'),'reason':rec.get('reason'),
+                last_results[model]={'state':rec.get('state'),'file':rec.get('file'),'mp4_file':rec.get('mp4_file'),'error':rec.get('error'),'reason':rec.get('reason'),
                     'bytes':rec.get('bytes_written',0),'duration':max(0,time.time()-rec.get('started',time.time())),
-                    'reconnections':rec.get('reconnects',0),'ffmpeg_errors':rec.get('ffmpeg_errors',0)
-                }
+                    'reconnections':rec.get('reconnects',0),'ffmpeg_errors':rec.get('ffmpeg_errors',0)}
                 recordings.pop(model,None)
 
 def start_record(model):
@@ -535,7 +510,7 @@ def start_record(model):
         last_results.pop(model,None)
         recordings[model]=rec
     threading.Thread(target=_record_worker,args=(model,),name=f'recorder-{model}',daemon=True).start()
-    return base+'.mp4'
+    return base+'.ts'
 
 def stop_record(model):
     model=safe_model(model)
@@ -576,6 +551,36 @@ def recover_partials():
             recovered.append(os.path.basename(dst))
     return recovered
 
+
+def _safe_recording_path(name):
+    raw=name or ''
+    name=os.path.basename(raw)
+    if not name or raw != name or name in ('.','..') or any(c in name for c in ('/','\\','\x00')):
+        raise ValueError('Nom de fichier invalide')
+    path=os.path.realpath(os.path.join(RECORDINGS,name))
+    root=os.path.realpath(RECORDINGS)+os.sep
+    if not path.startswith(root) or not os.path.isfile(path): raise ValueError('Fichier introuvable')
+    if name.endswith('.part') or name.endswith('.mp4.part'): raise ValueError('Un fichier temporaire ne peut pas être manipulé')
+    return path
+
+def list_recordings():
+    items=[]
+    active=set()
+    with lock:
+        for rec in recordings.values():
+            for key in ('ts','final'):
+                if rec.get(key): active.add(os.path.realpath(rec[key]))
+    for name in os.listdir(RECORDINGS):
+        path=os.path.join(RECORDINGS,name)
+        if not os.path.isfile(path) or name.endswith('.part') or os.path.realpath(path) in active: continue
+        try:
+            st=os.stat(path)
+            if name.lower().endswith(('.ts','.mp4','.mkv')):
+                items.append({'name':name,'size':st.st_size,'mtime':st.st_mtime,'type':name.rsplit('.',1)[-1].lower()})
+        except OSError: pass
+    items.sort(key=lambda x:x['mtime'],reverse=True)
+    return items
+
 class Handler(BaseHTTPRequestHandler):
     def js(self,code,data):
         b=json.dumps(data,ensure_ascii=False).encode();self.send_response(code);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)
@@ -586,6 +591,30 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/health':self.js(200,{'player':'ok','ffmpeg':FFMPEG,'recordings_dir':RECORDINGS});return
         if path=='/record/recover':self.js(200,{'ok':True,'recovered':recover_partials()});return
         if path=='/models/status':self.js(200,{'models':snapshot()});return
+        if path=='/recordings/list':self.js(200,{'ok':True,'files':list_recordings()});return
+        if path=='/recordings/play':
+            try:
+                file_path=_safe_recording_path(parse_qs(urlparse(self.path).query).get('name',[''])[0])
+                if not file_path.lower().endswith('.mp4'): raise ValueError('La lecture intégrée est disponible pour les MP4 uniquement')
+                size=os.path.getsize(file_path); start=0; end=size-1
+                rng=self.headers.get('Range')
+                if rng and rng.startswith('bytes='):
+                    spec=rng[6:].split(',',1)[0]; a,b=(spec.split('-',1)+[''])[:2]
+                    if a: start=int(a)
+                    if b: end=min(end,int(b))
+                    if start> end or start>=size: self.send_error(416); return
+                self.send_response(206 if rng else 200); self.send_header('Content-Type','video/mp4'); self.send_header('Accept-Ranges','bytes')
+                self.send_header('Content-Length',str(end-start+1))
+                if rng:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
+                self.end_headers()
+                with open(file_path,'rb') as f:
+                    f.seek(start); remaining=end-start+1
+                    while remaining:
+                        chunk=f.read(min(1024*1024,remaining))
+                        if not chunk: break
+                        self.wfile.write(chunk); remaining-=len(chunk)
+                return
+            except Exception as e:self.js(400,{'ok':False,'error':str(e)});return
         self.send_error(404)
     def do_POST(self):
         path=urlparse(self.path).path; q=parse_qs(urlparse(self.path).query); m=q.get('model',[''])[0]; kind=q.get('kind',['manual'])[0]
@@ -609,6 +638,22 @@ class Handler(BaseHTTPRequestHandler):
                 if m in recordings: f=stop_record(m); self.js(200,{'ok':True,'recording':False,'file':f})
                 else: f=start_record(m); self.js(200,{'ok':True,'recording':True,'file':f})
                 return
+            if path=='/recordings/convert':
+                name=q.get('name',[''])[0]; src=_safe_recording_path(name)
+                if not src.lower().endswith('.ts'): raise ValueError('Seuls les fichiers .ts peuvent être convertis')
+                dst=os.path.splitext(src)[0]+'.mp4'
+                if os.path.exists(dst): raise ValueError('Le MP4 existe déjà : aucune donnée écrasée')
+                logpath=os.path.join(LOGS,'library_convert_'+re.sub(r'[^A-Za-z0-9_.-]','_',name)+'.log')
+                with open(logpath,'w',buffering=1) as log:
+                    ok=_convert_ts_to_mp4(src,dst,log,delete_source=(q.get('delete',['0'])[0]=='1'))
+                if not ok: raise RuntimeError('FFmpeg n’a pas pu valider le MP4 ; le TS original est conservé')
+                self.js(200,{'ok':True,'mp4':os.path.basename(dst),'source_deleted':not os.path.exists(src)});return
+            if path=='/recordings/delete':
+                name=q.get('name',[''])[0]; target=_safe_recording_path(name)
+                with lock:
+                    if any(os.path.realpath(target) in (os.path.realpath(r.get('ts','')),os.path.realpath(r.get('final',''))) for r in recordings.values()):
+                        raise ValueError('Impossible de supprimer un enregistrement actif')
+                os.remove(target); self.js(200,{'ok':True});return
             self.send_error(404)
         except Exception as e:self.js(409,{'ok':False,'error':str(e)})
     def log_message(self,fmt,*args):print('[PLAYER] '+fmt%args)

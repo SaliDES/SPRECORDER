@@ -154,3 +154,17 @@ Les versions actuelles de TrueNAS SCALE proposent le déploiement de Compose via
 
 
 **Limite importante concernant l'écran « OFFLINE » :** l'arrêt automatique utilise le statut public du profil (plusieurs contrôles consécutifs) et l'absence de croissance du fichier. Il ne fait pas d'OCR/analyse d'image du texte « OFFLINE » incrusté dans la vidéo. Si une image ou un segment OFFLINE a déjà été reçu avant l'arrêt, il peut donc se trouver dans le TS source et dans le MP4. Le TS est supprimé après conversion validée, pas avant.
+
+## Version 1.2.0 — capture fix and recording library
+
+- Restores the explicit FFmpeg stdout pipe reader used by the original recorder. Each chunk is read, written and flushed by the Python worker, so the UI can reliably detect the first bytes and file growth.
+- Adds a **Bibliothèque** tab listing completed `.ts`, `.mp4`, and `.mkv` recordings with file sizes and dates.
+- MP4 files can be opened in the browser. Existing `.ts` files can be remuxed to MP4 without re-encoding.
+- Manual library conversion keeps the original `.ts` by default. The user can opt to delete it only after FFmpeg and ffprobe validate the MP4. Failed conversions keep the TS.
+- Individual deletion is protected by a confirmation prompt; active and temporary `.part` files are excluded.
+
+The automatic post-recording conversion still deletes its TS source only after a validated MP4 has been produced.
+
+### TrueNAS SCALE upgrade notes
+
+Use `docker-compose.truenas.yml` as the starting point. It intentionally keeps the existing single bind mount `/mnt/services/SPRECORDER:/data` so `models.json`, `config`, `recordings`, `modules`, and `logs` all remain persistent. Do not delete or recreate that host dataset during the upgrade. The GHCR image path assumes the GitHub repository owner is `salides`, matching the previous image name; if the repository is under a different owner, change only the image owner to match the GitHub Actions package path.
