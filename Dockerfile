@@ -22,4 +22,4 @@ COPY app/player.py /app/sprecorder/player.py
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh && mkdir -p /data/config /data/recordings /data/modules /data/logs
 EXPOSE 8080 3030
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]
