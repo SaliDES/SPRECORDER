@@ -106,15 +106,18 @@ docker build --platform linux/amd64 -t sprecorder:robust .
 Le workflow publie `ghcr.io/salides/sprecorder:latest` pour `linux/amd64`.
 
 
-## Détection prudente de fin de live
+## Version 2.1.1 — surveillance indépendante de la taille
 
-Le moteur d'enregistrement original est conservé : commande FFmpeg, flux via stdout,
-écriture par blocs dans le `.ts.part`, reconnexions et finalisation restent inchangés.
-La seule modification du suivi est une double condition d'arrêt : 3 contrôles hors ligne
-consécutifs ET fichier inchangé pendant 30 secondes. Si le fichier grossit encore,
-l'enregistrement continue. Une erreur de vérification réseau ne compte pas comme hors ligne.
+Le monitoring Stripchat et le moteur d'enregistrement d'origine n'ont pas été modifiés.
+Un thread indépendant examine uniquement la taille du fichier `.ts.part` de chaque
+enregistrement actif. Si sa taille reste identique pendant 600 secondes (10 minutes
+par défaut), il demande l'arrêt en appelant `stop_record(model)`, exactement comme
+le bouton d'arrêt de l'interface web. Le watcher ne consulte pas le statut online/offline.
 
-Réglages : `SPREC_OFFLINE_CONFIRMATIONS=3` et `SPREC_OFFLINE_NO_GROWTH_SECONDS=30`.
+Variables :
+- `SPREC_SIZE_WATCH_SECONDS=600` : durée sans croissance avant arrêt.
+- `SPREC_SIZE_WATCH_POLL_SECONDS=30` : fréquence de vérification.
 
-L'onglet Bibliothèque permet de consulter les anciens fichiers, convertir un `.ts` en `.mp4`
-et supprimer des fichiers. La conversion est séparée de la capture et conserve le TS en cas d'échec.
+La version est affichée en haut à gauche et exposée par `/health`.
+La bibliothèque permet de lister les anciens fichiers, convertir TS vers MP4 et supprimer
+les fichiers sélectionnés. Un TS source n'est supprimé qu'après validation du MP4.
