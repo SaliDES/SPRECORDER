@@ -106,65 +106,15 @@ docker build --platform linux/amd64 -t sprecorder:robust .
 Le workflow publie `ghcr.io/salides/sprecorder:latest` pour `linux/amd64`.
 
 
-## Conversion automatique en MP4
+## Détection prudente de fin de live
 
-À chaque arrêt normal (arrêt manuel ou arrêt automatique après confirmation hors ligne) :
+Le moteur d'enregistrement original est conservé : commande FFmpeg, flux via stdout,
+écriture par blocs dans le `.ts.part`, reconnexions et finalisation restent inchangés.
+La seule modification du suivi est une double condition d'arrêt : 3 contrôles hors ligne
+consécutifs ET fichier inchangé pendant 30 secondes. Si le fichier grossit encore,
+l'enregistrement continue. Une erreur de vérification réseau ne compte pas comme hors ligne.
 
-1. le `.ts.part` est finalisé en `.ts` ;
-2. FFmpeg remuxe le TS vers un fichier temporaire `.mp4.part` avec `-c copy` (pas de réencodage) ;
-3. si FFmpeg réussit et que `ffprobe` confirme une piste vidéo et une durée supérieure à zéro, le MP4 est renommé atomiquement ;
-4. le TS source est supprimé **uniquement après validation du MP4**.
+Réglages : `SPREC_OFFLINE_CONFIRMATIONS=3` et `SPREC_OFFLINE_NO_GROWTH_SECONDS=30`.
 
-Si la conversion échoue ou si le MP4 est invalide, le `.ts` source est conservé et l'interface affiche une erreur. Les fichiers `.ts.part` issus d'une panne ne sont pas convertis automatiquement tant qu'ils ne sont pas récupérés/finalisés.
-
-## Arrêt automatique hors ligne
-
-Le moniteur vérifie chaque modèle toutes les 10 secondes. Pour éviter qu'une réponse réseau isolée arrête un live, il exige par défaut 3 contrôles hors ligne consécutifs. Il attend ensuite que le fichier n'ait pas grossi pendant 15 secondes avant d'arrêter FFmpeg et de lancer la conversion MP4. Cela s'applique aux enregistrements manuels et automatiques.
-
-Variables configurables dans `docker-compose.yml` :
-
-- `SPREC_OFFLINE_CONFIRMATIONS=3` : nombre de contrôles hors ligne consécutifs.
-- `SPREC_OFFLINE_NO_GROWTH_SECONDS=15` : délai sans nouvelles données avant l'arrêt.
-- `SPREC_CONVERT_TIMEOUT=14400` : timeout de conversion (4 heures).
-
-Un flux qui reste faussement détecté comme en ligne ou qui continue d'envoyer des données après le passage hors ligne peut retarder l'arrêt. Une vidéo réellement absente du flux ne peut pas être reconstruite par la conversion.
-
-
-## Installation sur TrueNAS SCALE (via GitHub Container Registry)
-
-Le dépôt contient aussi `docker-compose.truenas.yml`, destiné à l'écran **Install via YAML** de TrueNAS. Il utilise l'image publiée par GitHub Actions et conserve les données sur des chemins hôte persistants.
-
-1. Pousse tout le contenu du dépôt sur la branche `main` de ton GitHub.
-2. Dans GitHub, attends la réussite de l'action **Build and Publish SPRECORDER** dans l'onglet Actions. Elle publie `ghcr.io/<ton-utilisateur>/sprecorder:latest`.
-3. Dans les paramètres du package GitHub Container Registry, rends le package public, ou configure les identifiants du registre dans TrueNAS si tu veux le garder privé.
-4. Sur TrueNAS, crée un dataset/dossier pour les données, puis les sous-dossiers `config`, `recordings`, `modules` et `logs`. Le modèle fourni utilise `/mnt/services/SPRECORDER/...`; adapte ces chemins dans le YAML si ton dataset est ailleurs.
-5. Dans TrueNAS : **Apps > Discover Apps > Custom App > ⋮ > Install via YAML**. Donne le nom `sprecorder`, colle le contenu de `docker-compose.truenas.yml`, remplace `YOUR_GITHUB_USERNAME` par ton nom GitHub, puis enregistre.
-6. Ouvre `http://IP_DE_TON_NAS:8080`.
-
-Pour un déploiement en ligne de commande depuis un clone du dépôt, utilise plutôt le `docker-compose.yml` local (il construit l'image sur le NAS) :
-
-```bash
-docker compose up -d --build
-docker compose logs -f sprecorder
-```
-
-Avant toute mise à jour, arrête l'application mais **ne supprime jamais** les datasets `config` et `recordings`. Ils contiennent les modèles et les vidéos.
-
-Les versions actuelles de TrueNAS SCALE proposent le déploiement de Compose via **Install via YAML**. Les chemins hôte doivent exister avant le déploiement ; voir la documentation TrueNAS citée dans la procédure d'installation.
-
-
-**Limite importante concernant l'écran « OFFLINE » :** l'arrêt automatique utilise le statut public du profil (plusieurs contrôles consécutifs) et l'absence de croissance du fichier. Il ne fait pas d'OCR/analyse d'image du texte « OFFLINE » incrusté dans la vidéo. Si une image ou un segment OFFLINE a déjà été reçu avant l'arrêt, il peut donc se trouver dans le TS source et dans le MP4. Le TS est supprimé après conversion validée, pas avant.
-
-## Version 1.2.0 — capture fix and recording library
-
-- Restores the explicit FFmpeg stdout pipe reader used by the original recorder. Each chunk is read, written and flushed by the Python worker, so the UI can reliably detect the first bytes and file growth.
-- Adds a **Bibliothèque** tab listing completed `.ts`, `.mp4`, and `.mkv` recordings with file sizes and dates.
-- MP4 files can be opened in the browser. Existing `.ts` files can be remuxed to MP4 without re-encoding.
-- Manual library conversion keeps the original `.ts` by default. The user can opt to delete it only after FFmpeg and ffprobe validate the MP4. Failed conversions keep the TS.
-- Individual deletion is protected by a confirmation prompt; active and temporary `.part` files are excluded.
-
-The automatic post-recording conversion still deletes its TS source only after a validated MP4 has been produced.
-
-### TrueNAS SCALE upgrade notes
-
-Use `docker-compose.truenas.yml` as the starting point. It intentionally keeps the existing single bind mount `/mnt/services/SPRECORDER:/data` so `models.json`, `config`, `recordings`, `modules`, and `logs` all remain persistent. Do not delete or recreate that host dataset during the upgrade. The GHCR image path assumes the GitHub repository owner is `salides`, matching the previous image name; if the repository is under a different owner, change only the image owner to match the GitHub Actions package path.
+L'onglet Bibliothèque permet de consulter les anciens fichiers, convertir un `.ts` en `.mp4`
+et supprimer des fichiers. La conversion est séparée de la capture et conserve le TS en cas d'échec.

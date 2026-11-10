@@ -18,10 +18,12 @@ services:
       SPREC_FFMPEG_RECONNECT_DELAY: "5"
       SPREC_FFMPEG_MAX_RECONNECTS: "0"
       SPREC_OFFLINE_CONFIRMATIONS: "3"
-      SPREC_OFFLINE_NO_GROWTH_SECONDS: "15"
-      SPREC_CONVERT_TIMEOUT: "14400"
+      SPREC_OFFLINE_NO_GROWTH_SECONDS: "30"
     ports:
       - "8080:8080"
       - "3030:3030"
     volumes:
-      - /mnt/services/SPRECORDER:/data
+      - /mnt/services/SPRECORDER/config:/data/config
+      - /mnt/services/SPRECORDER/recordings:/data/recordings
+      - /mnt/services/SPRECORDER/modules:/data/modules
+      - /mnt/services/SPRECORDER/logs:/data/logs
