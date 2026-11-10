@@ -15,23 +15,19 @@ STARTUP_TIMEOUT=float(os.environ.get('SPREC_RECORDING_START_TIMEOUT','30'))
 STALL_TIMEOUT=float(os.environ.get('SPREC_FFMPEG_STALL_TIMEOUT','45'))
 RECONNECT_DELAY=float(os.environ.get('SPREC_FFMPEG_RECONNECT_DELAY','5'))
 MAX_RECONNECTS=int(os.environ.get('SPREC_FFMPEG_MAX_RECONNECTS','0'))  # 0 = unlimited while recording
-APP_VERSION='2.1.1-size-watch'
-SIZE_WATCH_SECONDS=max(60,int(os.environ.get('SPREC_SIZE_WATCH_SECONDS','600')))
-SIZE_WATCH_POLL_SECONDS=max(5,int(os.environ.get('SPREC_SIZE_WATCH_POLL_SECONDS','30')))
 CHUNK_SIZE=64*1024
 FFMPEG_ERROR_RE=re.compile(r'(?:error|failed|corrupt|non-existing PPS|decode_slice_header|no frame|DTS .*out of order|invalid|I/O error|Connection .* failed)',re.I)
 
-PAGE=r'''<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SPRECORDER v2.1.1-size-watch</title><script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.8.0/dist/mpegts.min.js"></script><style>
-*{box-sizing:border-box}body{margin:0;background:#0f1115;color:#eee;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}main{max-width:1450px;margin:24px auto;padding:0 18px}.top{display:flex;align-items:center;justify-content:space-between}.tabs{display:flex;gap:8px;margin:22px 0 18px}.tab{padding:10px 16px;border:1px solid #333842;background:#191c23;color:#bbb;border-radius:9px;cursor:pointer;font-weight:700}.tab.active{background:#3498db;color:#fff;border-color:#3498db}.panel{display:none}.panel.active{display:block}.top h1{margin:0}.version{font-size:12px;font-weight:600;color:#8f98a8;background:#242a34;border:1px solid #3a414d;border-radius:7px;padding:4px 7px;vertical-align:middle;margin-left:8px}.add{display:flex;gap:8px;margin:14px 0}.add input{flex:1;min-width:220px;padding:12px;border-radius:9px;border:1px solid #3a3d45;background:#1b1e25;color:#fff;font-size:15px}.add button,.small{padding:10px 14px;border:0;border-radius:8px;cursor:pointer;font-weight:600}.add button{background:#2ecc71}.summary{color:#aaa;margin:8px 0 18px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:18px}.autoGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}.card{background:#171a21;border:1px solid #2c3039;border-radius:14px;overflow:hidden;box-shadow:0 5px 18px #0004}.head{display:flex;align-items:center;gap:12px;padding:12px 14px}.avatar{width:52px;height:52px;border-radius:50%;object-fit:cover;background:#292d35;border:2px solid #363b46}.name{font-weight:700;font-size:17px}.state{font-size:13px;color:#999;margin-top:3px}.state.live{color:#2ecc71}.spacer{flex:1}.remove{background:#2a2e36;color:#bbb}.videoWrap{position:relative;background:#000}.videoWrap video{display:block;width:100%;aspect-ratio:16/9;background:#000}.overlay{position:absolute;left:10px;top:10px;background:#000b;padding:5px 8px;border-radius:7px;font-size:12px}.controls{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px}.monitor{background:#3498db;color:white}.record{background:#e67e22;color:#fff}.record.active{background:#c0392b}.autoRec{background:#8e44ad;color:#fff}.meta{padding:0 14px 12px;color:#8d929d;font-size:12px;min-height:18px}.autoCard{padding:15px}.autoControls{display:flex;gap:8px;align-items:center;margin-top:14px}.autoDesc{color:#9ca1ab;font-size:13px;line-height:1.45;margin-top:8px}.empty{padding:50px 20px;text-align:center;color:#777;border:1px dashed #343842;border-radius:12px}.hint{color:#777;font-size:12px;margin-top:14px}.sectionTitle{font-size:20px;font-weight:700}.sectionDesc{color:#999;margin:6px 0 16px}@media(max-width:520px){.grid,.autoGrid{grid-template-columns:1fr}.card{min-width:0}}
-</style></head><body><main><div class="top"><h1>SPRECORDER <span class="version">v2.1.1-size-watch</span></h1><div id="summary" class="summary"></div></div><div class="tabs"><button class="small" style="background:#444;color:#fff" onclick="recoverPartials()">Récupérer les .ts.part</button><button class="tab active" data-tab="manual" onclick="switchTab('manual')">Monitoring</button><button class="tab" data-tab="auto" onclick="switchTab('auto')">Enregistrement automatique</button><button class="tab" data-tab="library" onclick="switchTab('library');refreshLibrary()">Bibliothèque</button></div>
+PAGE=r'''<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SPRECORDER</title><script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.8.0/dist/mpegts.min.js"></script><style>
+*{box-sizing:border-box}body{margin:0;background:#0f1115;color:#eee;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}main{max-width:1450px;margin:24px auto;padding:0 18px}.top{display:flex;align-items:center;justify-content:space-between}.tabs{display:flex;gap:8px;margin:22px 0 18px}.tab{padding:10px 16px;border:1px solid #333842;background:#191c23;color:#bbb;border-radius:9px;cursor:pointer;font-weight:700}.tab.active{background:#3498db;color:#fff;border-color:#3498db}.panel{display:none}.panel.active{display:block}.top h1{margin:0}.add{display:flex;gap:8px;margin:14px 0}.add input{flex:1;min-width:220px;padding:12px;border-radius:9px;border:1px solid #3a3d45;background:#1b1e25;color:#fff;font-size:15px}.add button,.small{padding:10px 14px;border:0;border-radius:8px;cursor:pointer;font-weight:600}.add button{background:#2ecc71}.summary{color:#aaa;margin:8px 0 18px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:18px}.autoGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}.card{background:#171a21;border:1px solid #2c3039;border-radius:14px;overflow:hidden;box-shadow:0 5px 18px #0004}.head{display:flex;align-items:center;gap:12px;padding:12px 14px}.avatar{width:52px;height:52px;border-radius:50%;object-fit:cover;background:#292d35;border:2px solid #363b46}.name{font-weight:700;font-size:17px}.state{font-size:13px;color:#999;margin-top:3px}.state.live{color:#2ecc71}.spacer{flex:1}.remove{background:#2a2e36;color:#bbb}.videoWrap{position:relative;background:#000}.videoWrap video{display:block;width:100%;aspect-ratio:16/9;background:#000}.overlay{position:absolute;left:10px;top:10px;background:#000b;padding:5px 8px;border-radius:7px;font-size:12px}.controls{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px}.monitor{background:#3498db;color:white}.record{background:#e67e22;color:#fff}.record.active{background:#c0392b}.autoRec{background:#8e44ad;color:#fff}.meta{padding:0 14px 12px;color:#8d929d;font-size:12px;min-height:18px}.autoCard{padding:15px}.autoControls{display:flex;gap:8px;align-items:center;margin-top:14px}.autoDesc{color:#9ca1ab;font-size:13px;line-height:1.45;margin-top:8px}.empty{padding:50px 20px;text-align:center;color:#777;border:1px dashed #343842;border-radius:12px}.hint{color:#777;font-size:12px;margin-top:14px}.sectionTitle{font-size:20px;font-weight:700}.sectionDesc{color:#999;margin:6px 0 16px}@media(max-width:520px){.grid,.autoGrid{grid-template-columns:1fr}.card{min-width:0}}
+</style></head><body><main><div class="top"><h1>SPRECORDER</h1><div id="summary" class="summary"></div></div><div class="tabs"><button class="small" style="background:#444;color:#fff" onclick="recoverPartials()">Récupérer les .ts.part</button><button class="tab active" data-tab="manual" onclick="switchTab('manual')">Monitoring</button><button class="tab" data-tab="auto" onclick="switchTab('auto')">Enregistrement automatique</button></div>
 <section id="manualPanel" class="panel active"><div class="sectionTitle">Monitoring manuel</div><div class="sectionDesc">Ajoute tes modèles, surveille chaque live indépendamment et lance ou arrête l'enregistrement quand tu le souhaites.</div><div class="add"><input id="newModel" placeholder="Ajouter un modèle, ex: MasonxHer" autocomplete="off"><button onclick="addModel('manual')">+ Ajouter</button></div><div id="manualGrid" class="grid"></div><div id="manualEmpty" class="empty">Ajoute un ou plusieurs modèles pour commencer.</div></section>
 <section id="autoPanel" class="panel"><div class="sectionTitle">Enregistrement automatique</div><div class="sectionDesc">Les modèles placés ici sont surveillés en permanence. Dès qu'un modèle passe en ligne, SPRECORDER démarre automatiquement l'enregistrement. Lorsqu'il repasse hors ligne, le MP4 est finalisé.</div><div class="add"><input id="newAutoModel" placeholder="Ajouter un modèle à enregistrer automatiquement" autocomplete="off"><button onclick="addModel('auto')">+ Ajouter</button></div><div id="autoGrid" class="autoGrid"></div><div id="autoEmpty" class="empty">Aucun modèle en enregistrement automatique.</div></section>
-<section id="libraryPanel" class="panel"><div class="sectionTitle">Bibliothèque des enregistrements</div><div class="sectionDesc">Historique des vidéos. Convertis les anciens TS en MP4 ou supprime les fichiers sélectionnés.</div><div class="controls" style="padding-left:0"><button class="small monitor" onclick="refreshLibrary()">Actualiser</button><label style="display:flex;gap:8px;align-items:center;color:#aaa"><input id="deleteTsAfterConvert" type="checkbox"> Supprimer le TS après conversion validée</label></div><div id="libraryList" class="autoGrid"></div><div id="libraryEmpty" class="empty" style="display:none">Aucun enregistrement trouvé.</div></section>
 <div class="hint">Le backend original ChanTrail reste responsable du relay, du HLS et de la résolution Stripchat. Les deux listes sont indépendantes.</div></main><script>
 const manualGrid=document.getElementById('manualGrid'),autoGrid=document.getElementById('autoGrid'),manualEmpty=document.getElementById('manualEmpty'),autoEmpty=document.getElementById('autoEmpty'),summary=document.getElementById('summary'),newModel=document.getElementById('newModel'),newAutoModel=document.getElementById('newAutoModel');const players={};let data={manual:{},auto:{}};
 [newModel,newAutoModel].forEach((i,idx)=>i.addEventListener('keydown',e=>{if(e.key==='Enter')addModel(idx?'auto':'manual')}));
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function switchTab(t){document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));['manual','auto','library'].forEach(k=>document.getElementById(k+'Panel').classList.toggle('active',k===t))}
+function switchTab(t){document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));document.getElementById('manualPanel').classList.toggle('active',t==='manual');document.getElementById('autoPanel').classList.toggle('active',t==='auto')}
 function addModel(kind){const input=kind==='auto'?newAutoModel:newModel,m=input.value.trim();if(!m)return;fetch('/models/add?kind='+kind+'&model='+encodeURIComponent(m),{method:'POST'}).then(r=>r.json()).then(j=>{if(!j.ok)throw Error(j.error);input.value='';refreshStatus()}).catch(e=>alert(e.message))}
 function removeModel(kind,m){if(!confirm('Supprimer '+m+' de cette liste ?'))return;if(kind==='manual')stopMonitor(m);fetch('/models/remove?kind='+kind+'&model='+encodeURIComponent(m),{method:'POST'}).then(r=>r.json()).then(j=>{if(!j.ok)throw Error(j.error);refreshStatus()}).catch(e=>alert(e.message))}
 function monitor(m){if(players[m]){stopMonitor(m);return}const video=document.querySelector('[data-video="'+CSS.escape(m)+'"]');if(!video||!window.mpegts||!mpegts.isSupported()){alert('Le lecteur mpegts.js n’est pas disponible.');return}const url=(location.protocol==='https:'?'https://':'http://')+location.hostname+':3030/stream/'+encodeURIComponent(m);const p=mpegts.createPlayer({type:'mpegts',isLive:true,url:url},{enableWorker:false,liveBufferLatencyChasing:true,liveBufferLatencyMaxLatency:1.5,liveBufferLatencyMinRemain:.3});p.on(mpegts.Events.ERROR,(t,d)=>setMeta(m,'Erreur lecteur: '+t+' / '+d));p.attachMediaElement(video);p.load();p.play().catch(()=>{});players[m]=p;setMeta(m,'Monitoring actif');updateControls(m)}
@@ -42,32 +38,6 @@ function recoverPartials(){fetch('/record/recover').then(r=>r.json()).then(j=>al
 function rec(m){fetch('/record/toggle?model='+encodeURIComponent(m),{method:'POST'}).then(r=>r.json()).then(j=>{if(!j.ok)throw Error(j.error);return refreshStatus()}).catch(e=>alert(e.message))}
 function renderManual(){const names=Object.keys(data.manual||{});manualEmpty.style.display=names.length?'none':'block';manualGrid.innerHTML=names.map(m=>{const x=data.manual[m],live=x.online,rec=x.recording,mon=!!players[m];return `<section class="card"><div class="head"><img class="avatar" src="${esc(x.avatar||'')}" onerror="this.style.visibility='hidden'"><div><div class="name">${esc(m)}</div><div class="state ${live?'live':''}" data-state="${esc(m)}">${live?'● EN LIGNE':'○ HORS LIGNE'}${rec?' · ENREGISTREMENT':''}</div></div><div class="spacer"></div><button class="small remove" onclick="removeModel('manual','${esc(m)}')">Supprimer</button></div><div class="videoWrap"><video data-video="${esc(m)}" controls autoplay muted playsinline></video><div class="overlay" data-overlay="${esc(m)}" style="display:${live?'block':'none'}">LIVE</div></div><div class="controls"><button class="small monitor" data-monitor="${esc(m)}" onclick="monitor('${esc(m)}')">${mon?'Arrêter le monitoring':'Monitorer le live'}</button><button class="small record ${rec?'active':''}" data-record="${esc(m)}" onclick="rec('${esc(m)}')">${rec?'Arrêter l’enregistrement':'Enregistrer maintenant'}</button></div><div class="meta" data-meta="${esc(m)}">${x.recording_error?'Erreur: '+esc(x.recording_error):rec?'RECORDING · '+esc(formatBytes(x.bytes))+' · '+esc(formatDuration(x.duration))+' · reconnexions '+esc(x.reconnections):mon?'Monitoring actif':'Prêt.'}</div></section>`}).join('')}
 function renderAuto(){const names=Object.keys(data.auto||{});autoEmpty.style.display=names.length?'none':'block';autoGrid.innerHTML=names.map(m=>{const x=data.auto[m],live=x.online,rec=x.recording;return `<section class="card autoCard"><div class="head" style="padding:0"><img class="avatar" src="${esc(x.avatar||'')}" onerror="this.style.visibility='hidden'"><div><div class="name">${esc(m)}</div><div class="state ${live?'live':''}" data-autostate="${esc(m)}">${live?'● EN LIGNE':'○ HORS LIGNE'}</div></div><div class="spacer"></div><button class="small remove" onclick="removeModel('auto','${esc(m)}')">Supprimer</button></div><div class="autoDesc">${live?(rec?'Enregistrement automatique en cours.':'En ligne — démarrage automatique.'):'Hors ligne — en attente du prochain live.'}</div><div class="autoControls"><button class="small autoRec" onclick="rec('${esc(m)}')">${rec?'Arrêter maintenant':'Enregistrer maintenant'}</button></div><div class="meta" data-autometa="${esc(m)}">${rec?'Fichier: '+esc(x.file):'Surveillance automatique active.'}</div></section>`}).join('')}
-
-async function refreshLibrary(){
- const box=document.getElementById('libraryList'),empty=document.getElementById('libraryEmpty');
- box.innerHTML='<div class="summary">Chargement…</div>';
- try{
-  const r=await fetch('/library/list?ts='+Date.now(),{cache:'no-store'}),j=await r.json();
-  if(!j.ok)throw Error(j.error||'Erreur');
-  const fs=j.files||[];empty.style.display=fs.length?'none':'block';
-  box.innerHTML=fs.map(f=>{
-   const n=esc(f.name),ts=f.name.toLowerCase().endsWith('.ts'),mp4=f.name.toLowerCase().endsWith('.mp4');
-   return `<article class="card autoCard"><div class="name">${n}</div><div class="autoDesc">${formatBytes(f.size)} · ${new Date(f.mtime*1000).toLocaleString('fr-FR')}</div><div class="autoControls">${mp4?`<a class="small monitor" style="text-decoration:none" href="/library/file?name=${encodeURIComponent(f.name)}" target="_blank">Ouvrir</a>`:''}${ts?`<button class="small autoRec" onclick="convertLibraryFile('${n}')">Convertir en MP4</button>`:''}<button class="small remove" onclick="deleteLibraryFile('${n}')">Supprimer</button></div></article>`
-  }).join('');
- }catch(e){box.innerHTML='<div class="empty">'+esc(e.message)+'</div>'}
-}
-async function convertLibraryFile(name){
- const del=document.getElementById('deleteTsAfterConvert').checked;
- if(!confirm('Convertir '+name+' en MP4 ?'+(del?' Le TS sera supprimé seulement après validation du MP4.':' Le TS original sera conservé.')))return;
- try{const r=await fetch('/library/convert?name='+encodeURIComponent(name)+'&delete='+(del?'1':'0'),{method:'POST'}),j=await r.json();if(!j.ok)throw Error(j.error);alert('Conversion terminée : '+j.mp4);refreshLibrary()}
- catch(e){alert('Conversion impossible : '+e.message)}
-}
-async function deleteLibraryFile(name){
- if(!confirm('Supprimer définitivement '+name+' ?'))return;
- try{const r=await fetch('/library/delete?name='+encodeURIComponent(name),{method:'POST'}),j=await r.json();if(!j.ok)throw Error(j.error);refreshLibrary()}
- catch(e){alert('Suppression impossible : '+e.message)}
-}
-
 function formatBytes(n){n=Number(n||0);const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<4){n/=1024;i++}return n.toFixed(i?1:0)+' '+u[i]}
 function formatDuration(n){n=Math.max(0,Math.floor(Number(n||0)));const h=String(Math.floor(n/3600)).padStart(2,'0'),m=String(Math.floor(n%3600/60)).padStart(2,'0'),s=String(n%60).padStart(2,'0');return h+':'+m+':'+s}
 function updateSummary(){const a=Object.keys(data.manual||{}).length,b=Object.keys(data.auto||{}).length;summary.textContent=(a+b)+' modèle'+(a+b>1?'s':'')+' · '+a+' monitoring · '+b+' auto'}
@@ -506,111 +476,6 @@ def recover_partials():
             recovered.append(os.path.basename(dst))
     return recovered
 
-
-def size_watch_loop():
-    """Independent watchdog. It calls the same stop_record() as the web UI."""
-    watched={}
-    print(f'[SIZE-WATCH] enabled: stop after {SIZE_WATCH_SECONDS}s without file growth; poll={SIZE_WATCH_POLL_SECONDS}s',flush=True)
-    while True:
-        now=time.time()
-        with lock:
-            active=list(recordings.items())
-        active_keys=set()
-        to_stop=[]
-        for model,rec in active:
-            path=rec.get('ts')
-            if not path: continue
-            key=(model,path)
-            active_keys.add(key)
-            try: size=os.path.getsize(path)
-            except OSError: size=0
-            state=watched.get(key)
-            if state is None:
-                watched[key]={'size':size,'last_growth':now,'stopping':False}
-                continue
-            if size != state['size']:
-                state['size']=size
-                state['last_growth']=now
-                state['stopping']=False
-                continue
-            idle=now-state['last_growth']
-            if idle >= SIZE_WATCH_SECONDS and not state['stopping']:
-                state['stopping']=True
-                to_stop.append((model,key,idle,size))
-        for key in list(watched):
-            if key not in active_keys: watched.pop(key,None)
-        for model,key,idle,size in to_stop:
-            print(f'[SIZE-WATCH] {model}: file unchanged for {idle:.0f}s ({size} bytes); requesting normal stop.',flush=True)
-            try:
-                result=stop_record(model)
-                print(f'[SIZE-WATCH] {model}: normal stop completed: {result}',flush=True)
-            except Exception as e:
-                print(f'[SIZE-WATCH] {model}: stop request failed: {e}',flush=True)
-                if key in watched: watched[key]['stopping']=False
-        time.sleep(SIZE_WATCH_POLL_SECONDS)
-
-
-def _safe_library_path(name):
-    raw=name or ''
-    base=os.path.basename(raw)
-    if not base or base != raw or base in ('.','..') or any(c in base for c in ('/','\\','\x00')):
-        raise ValueError('Nom de fichier invalide')
-    path=os.path.realpath(os.path.join(RECORDINGS,base))
-    if not path.startswith(os.path.realpath(RECORDINGS)+os.sep) or not os.path.isfile(path):
-        raise ValueError('Fichier introuvable')
-    if base.endswith('.part'): raise ValueError('Un fichier temporaire ne peut pas être manipulé')
-    return path
-
-
-def _library_files():
-    active=set()
-    with lock:
-        for rec in recordings.values():
-            for key in ('ts','final'):
-                if rec.get(key): active.add(os.path.realpath(rec[key]))
-    out=[]
-    for name in os.listdir(RECORDINGS):
-        path=os.path.join(RECORDINGS,name)
-        if not os.path.isfile(path) or name.endswith('.part') or os.path.realpath(path) in active:
-            continue
-        if not name.lower().endswith(('.ts','.mp4','.mkv')): continue
-        try:
-            st=os.stat(path);out.append({'name':name,'size':st.st_size,'mtime':st.st_mtime})
-        except OSError: pass
-    out.sort(key=lambda x:x['mtime'],reverse=True)
-    return out
-
-
-def _library_convert(src,dst,delete_source=False):
-    tmp=dst+'.part'
-    ffprobe=shutil.which('ffprobe') or 'ffprobe'
-    timeout=max(60,int(os.environ.get('SPREC_CONVERT_TIMEOUT','14400')))
-    try:
-        if os.path.exists(tmp): os.remove(tmp)
-        cmd=[FFMPEG,'-hide_banner','-loglevel','warning','-nostdin','-y',
-             '-fflags','+discardcorrupt+genpts','-err_detect','ignore_err',
-             '-i',src,'-map','0:v?','-map','0:a?','-c','copy','-movflags','+faststart','-f','mp4',tmp]
-        result=subprocess.run(cmd,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
-                              stderr=subprocess.PIPE,timeout=timeout,check=False)
-        if result.returncode!=0 or not os.path.isfile(tmp) or os.path.getsize(tmp)<=0:
-            raise RuntimeError('FFmpeg conversion failed: '+result.stderr.decode('utf-8','replace')[-800:])
-        probe=subprocess.run([ffprobe,'-v','error','-show_entries','format=duration:stream=codec_type',
-                              '-of','json',tmp],stdout=subprocess.PIPE,stderr=subprocess.PIPE,
-                             text=True,timeout=60,check=False)
-        if probe.returncode!=0: raise RuntimeError('ffprobe validation failed: '+(probe.stderr or '')[-500:])
-        info=json.loads(probe.stdout or '{}')
-        if not any(s.get('codec_type')=='video' for s in (info.get('streams') or [])) or float((info.get('format') or {}).get('duration') or 0)<=0:
-            raise RuntimeError('MP4 invalide : piste vidéo absente ou durée nulle')
-        os.replace(tmp,dst)
-        if delete_source: os.remove(src)
-        return True
-    except Exception:
-        try:
-            if os.path.exists(tmp): os.remove(tmp)
-        except OSError: pass
-        raise
-
-
 class Handler(BaseHTTPRequestHandler):
     def js(self,code,data):
         b=json.dumps(data,ensure_ascii=False).encode();self.send_response(code);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)
@@ -618,32 +483,9 @@ class Handler(BaseHTTPRequestHandler):
         path=urlparse(self.path).path
         if path in ('/','/index.html'):
             b=PAGE.encode();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b);return
-        if path=='/health':self.js(200,{'player':'ok','version':APP_VERSION,'size_watch_seconds':SIZE_WATCH_SECONDS,'ffmpeg':FFMPEG,'recordings_dir':RECORDINGS});return
+        if path=='/health':self.js(200,{'player':'ok','ffmpeg':FFMPEG,'recordings_dir':RECORDINGS});return
         if path=='/record/recover':self.js(200,{'ok':True,'recovered':recover_partials()});return
         if path=='/models/status':self.js(200,{'models':snapshot()});return
-        if path=='/library/list':self.js(200,{'ok':True,'files':_library_files()});return
-        if path=='/library/file':
-            try:
-                fp=_safe_library_path(parse_qs(urlparse(self.path).query).get('name',[''])[0])
-                if not fp.lower().endswith('.mp4'): raise ValueError('Seuls les MP4 peuvent être ouverts ici')
-                size=os.path.getsize(fp);start=0;end=size-1;rng=self.headers.get('Range')
-                if rng and rng.startswith('bytes='):
-                    spec=rng[6:].split(',',1)[0];parts=spec.split('-',1)
-                    if parts[0]: start=int(parts[0])
-                    if len(parts)>1 and parts[1]: end=min(end,int(parts[1]))
-                    if start>end or start>=size: self.send_error(416);return
-                self.send_response(206 if rng else 200);self.send_header('Content-Type','video/mp4')
-                self.send_header('Accept-Ranges','bytes');self.send_header('Content-Length',str(end-start+1))
-                if rng:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
-                self.end_headers()
-                with open(fp,'rb') as f:
-                    f.seek(start);remaining=end-start+1
-                    while remaining:
-                        chunk=f.read(min(1024*1024,remaining))
-                        if not chunk:break
-                        self.wfile.write(chunk);remaining-=len(chunk)
-                return
-            except Exception as e:self.js(400,{'ok':False,'error':str(e)});return
         self.send_error(404)
     def do_POST(self):
         path=urlparse(self.path).path; q=parse_qs(urlparse(self.path).query); m=q.get('model',[''])[0]; kind=q.get('kind',['manual'])[0]
@@ -667,20 +509,6 @@ class Handler(BaseHTTPRequestHandler):
                 if m in recordings: f=stop_record(m); self.js(200,{'ok':True,'recording':False,'file':f})
                 else: f=start_record(m); self.js(200,{'ok':True,'recording':True,'file':f})
                 return
-            if path=='/library/convert':
-                name=q.get('name',[''])[0];srcpath=_safe_library_path(name)
-                if not srcpath.lower().endswith('.ts'): raise ValueError('Seuls les fichiers .ts peuvent être convertis')
-                dstpath=os.path.splitext(srcpath)[0]+'.mp4'
-                if os.path.exists(dstpath): raise ValueError('Le MP4 existe déjà : aucun fichier ne sera écrasé')
-                delete_source=q.get('delete',['0'])[0]=='1'
-                _library_convert(srcpath,dstpath,delete_source)
-                self.js(200,{'ok':True,'mp4':os.path.basename(dstpath),'source_deleted':not os.path.exists(srcpath)});return
-            if path=='/library/delete':
-                name=q.get('name',[''])[0];target=_safe_library_path(name)
-                with lock:
-                    if any(os.path.realpath(target) in (os.path.realpath(r.get('ts','')),os.path.realpath(r.get('final',''))) for r in recordings.values()):
-                        raise ValueError('Impossible de supprimer un enregistrement actif')
-                os.remove(target);self.js(200,{'ok':True});return
             self.send_error(404)
         except Exception as e:self.js(409,{'ok':False,'error':str(e)})
     def log_message(self,fmt,*args):print('[PLAYER] '+fmt%args)
@@ -713,7 +541,6 @@ if __name__=='__main__':
             print('[RECOVERY] scan failed:',e, flush=True)
     threading.Thread(target=background_recovery,daemon=True,name='recovery').start()
     threading.Thread(target=monitor_loop,daemon=True,name='monitor').start()
-    threading.Thread(target=size_watch_loop,daemon=True,name='size-watch').start()
     print(f'SPRECORDER player: http://{HOST}:{PORT}', flush=True)
     print(f'FFmpeg: {FFMPEG}', flush=True)
     print(f'Recordings: {RECORDINGS}', flush=True)

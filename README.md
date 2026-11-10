@@ -104,20 +104,3 @@ docker build --platform linux/amd64 -t sprecorder:robust .
 ## GitHub Actions
 
 Le workflow publie `ghcr.io/salides/sprecorder:latest` pour `linux/amd64`.
-
-
-## Version 2.1.1 — surveillance indépendante de la taille
-
-Le monitoring Stripchat et le moteur d'enregistrement d'origine n'ont pas été modifiés.
-Un thread indépendant examine uniquement la taille du fichier `.ts.part` de chaque
-enregistrement actif. Si sa taille reste identique pendant 600 secondes (10 minutes
-par défaut), il demande l'arrêt en appelant `stop_record(model)`, exactement comme
-le bouton d'arrêt de l'interface web. Le watcher ne consulte pas le statut online/offline.
-
-Variables :
-- `SPREC_SIZE_WATCH_SECONDS=600` : durée sans croissance avant arrêt.
-- `SPREC_SIZE_WATCH_POLL_SECONDS=30` : fréquence de vérification.
-
-La version est affichée en haut à gauche et exposée par `/health`.
-La bibliothèque permet de lister les anciens fichiers, convertir TS vers MP4 et supprimer
-les fichiers sélectionnés. Un TS source n'est supprimé qu'après validation du MP4.
