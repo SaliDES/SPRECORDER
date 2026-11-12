@@ -31,6 +31,9 @@ import sys,time,signal
 if '-version' in sys.argv:
     print('ffmpeg version test')
     raise SystemExit(0)
+if sys.argv and sys.argv[-1].endswith('.mp4.tmp'):
+    # Fail the fake conversion quickly; production must retain the TS source.
+    raise SystemExit(1)
 stop=False
 def h(*a):
     global stop
@@ -117,6 +120,31 @@ raise SystemExit(1)
         self.mod.FFMPEG = shutil.which("ffmpeg")
         recovered = self.mod.recover_partials()
         self.assertTrue(any(x.endswith(".recovered.ts") for x in recovered))
+
+    def test_debug_console_reads_persistent_logs(self):
+        log = Path(self.mod.LOGS) / "sprecorder.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("[STARTUP] ready\n[FFMPEG] test diagnostic\n", encoding="utf-8")
+        lines = self.mod.debug_log_lines(50)
+        self.assertTrue(any("sprecorder.log" in line for line in lines))
+        self.assertTrue(any("test diagnostic" in line for line in lines))
+
+    def test_persisted_online_flag_is_reset_after_restart(self):
+        Path(self.mod.MODELS_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.mod.MODELS_FILE).write_text(
+            '{"manual":{},"auto":{"modelA":{"avatar":"","online":true}}}',
+            encoding="utf-8",
+        )
+        self.mod.load_models()
+        self.assertFalse(self.mod.models["auto"]["modelA"]["online"])
+
+    def test_stripchat_request_failure_is_unknown_not_offline(self):
+        def unavailable(*args, **kwargs):
+            raise OSError("network unavailable")
+        self.mod.urlopen = unavailable
+        online, avatar = self.mod.fetch_stripchat("modelA")
+        self.assertIsNone(online)
+        self.assertEqual(avatar, "")
 
 
 if __name__ == "__main__":

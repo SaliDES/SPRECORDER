@@ -1,27 +1,46 @@
 services:
+  chantrail:
+    image: chantrail/stripchat-recorder@sha256:698cd1b22b0d33d615cb72280705160bed4953fdca8449eb05f77a9c5afb1e94
+    platform: linux/amd64
+    container_name: sprecorder-chantrail-048
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Paris
+      LANGUAGE: en-US
+      PORT: "3030"
+    ports:
+      - "13030:3030"
+    volumes:
+      - /mnt/services/SPRECORDER/config-chantrail-0.4:/app/stripchat-recorder/config
+      - /mnt/services/SPRECORDER/recordings:/app/stripchat-recorder/recordings
+      - /mnt/services/SPRECORDER/modules-chantrail-0.4:/app/stripchat-recorder/modules
+      - /mnt/services/SPRECORDER/logs-2.1.0:/app/stripchat-recorder/logs
+      - /mnt/services/SPRECORDER/ts_fragment-chantrail-0.4:/app/stripchat-recorder/ts_fragment
+
   sprecorder:
     build:
       context: .
-      platforms:
-        - linux/amd64
-    image: sprecorder:robust
-    container_name: sprecorder
+      dockerfile: Dockerfile
+    image: sprecorder:2.1.0
+    platform: linux/amd64
+    container_name: sprecorder-210
     restart: unless-stopped
+    depends_on:
+      - chantrail
     environment:
       TZ: Europe/Paris
       SPREC_HOST: 0.0.0.0
       SPREC_PORT: "8080"
-      SPREC_BACKEND: http://127.0.0.1:3030
+      SPREC_BACKEND: http://chantrail:3030
+      SPREC_RELAY_PORT: "13030"
       SPREC_DATA_DIR: /data
       SPREC_RECORDING_START_TIMEOUT: "30"
       SPREC_FFMPEG_STALL_TIMEOUT: "45"
       SPREC_FFMPEG_RECONNECT_DELAY: "5"
       SPREC_FFMPEG_MAX_RECONNECTS: "0"
     ports:
-      - "8080:8080"
-      - "3030:3030"
+      - "18080:8080"
     volumes:
-      - /mnt/services/SPRECORDER/config:/data/config
+      - /mnt/services/SPRECORDER/config-chantrail-0.4:/data/config
       - /mnt/services/SPRECORDER/recordings:/data/recordings
-      - /mnt/services/SPRECORDER/modules:/data/modules
-      - /mnt/services/SPRECORDER/logs:/data/logs
+      - /mnt/services/SPRECORDER/logs-2.1.0:/data/logs

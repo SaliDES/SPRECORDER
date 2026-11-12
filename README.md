@@ -1,106 +1,65 @@
-# SPRECORDER — TrueNAS / Docker — Robust 24/7 recording
+# SPRECORDER 2.1.0 — TrueNAS + ChanTrail 0.4.8-beta
 
-Cette version conserve le backend original ChanTrail pour le relay MPEG-TS et ajoute un superviseur FFmpeg robuste pour les enregistrements.
+SPRECORDER reste l'application principale. Il conserve son interface de monitoring et son moteur d'enregistrement FFmpeg robuste. ChanTrail 0.4.8-beta est utilisé comme moteur amont pour résoudre et relayer les flux Stripchat via son endpoint HLS relay.
+
+## Architecture
+
+- `sprecorder` : interface SPRECORDER, monitoring, enregistrements FFmpeg, reconnexions, bibliothèque et conversion MP4.
+- `chantrail` : résolution Stripchat et HLS relay officiel ChanTrail 0.4.8-beta.
+- SPRECORDER récupère le flux via `http://chantrail:3030/stream/{model}`.
+- Le navigateur utilise le relay publié sur le port hôte `13030`.
+- Interface SPRECORDER : `http://IP_DU_NAS:18080`.
+
+## Données et compatibilité
+
+Les anciens fichiers ne sont pas supprimés. Les enregistrements sont conservés dans `/mnt/services/SPRECORDER/recordings`.
+
+La configuration ChanTrail 0.4.x est isolée dans `config-chantrail-0.4` et les modules dans `modules-chantrail-0.4`, car ChanTrail signale des incompatibilités entre les branches 0.3 et 0.4. Les anciens dossiers `config` et `modules` ne sont pas réutilisés.
+
+SPRECORDER conserve sa liste de modèles dans `config-chantrail-0.4/models.json`.
+
+## Déploiement TrueNAS
+
+Depuis le dossier contenant ce projet :
+
+```bash
+mkdir -p /mnt/services/SPRECORDER/config-chantrail-0.4
+mkdir -p /mnt/services/SPRECORDER/recordings
+mkdir -p /mnt/services/SPRECORDER/modules-chantrail-0.4
+mkdir -p /mnt/services/SPRECORDER/logs-2.1.0
+mkdir -p /mnt/services/SPRECORDER/ts_fragment-chantrail-0.4
+docker compose config
+docker compose pull chantrail
+docker compose up -d --build
+```
+
+Ouvrir `http://IP_DU_NAS:18080`.
+
+Au premier démarrage, vérifier dans les paramètres ChanTrail que le dossier de sortie est `/app/stripchat-recorder/recordings`.
+
+## Diagnostic
+
+Le bouton « Console » en bas à droite ouvre une console flottante. Elle affiche les dernières lignes de :
+
+- `sprecorder.log`
+- `chantrail.log`
+- `runtime.log`
+- `ffmpeg_*.log` et `recovery_*.log`
+
+Endpoint JSON : `/debug/logs?limit=260`.
+
+Journaux persistants : `/mnt/services/SPRECORDER/logs-2.1.0`.
 
 ## Enregistrement
 
-- H.264/AAC conservés en `-c copy` : aucun réencodage.
-- Sortie active : `model_YYYYMMDD_HHMMSS.ts.part`.
-- Le `.ts.part` est alimenté directement par la sortie MPEG-TS de FFmpeg.
-- Tant que FFmpeg produit des données, la taille du `.ts.part` augmente.
-- Après un arrêt normal, `os.replace()` renomme atomiquement `.ts.part` en `.ts`.
-- Après une panne, le `.ts.part` reste volontairement présent.
-- Une perte du flux déclenche automatiquement une nouvelle instance FFmpeg vers le même `.ts.part`; aucun second enregistrement parallèle n'est créé pour le même modèle.
-- Les reconnexions FFmpeg HTTP sont également activées lorsqu'elles sont supportées par la version de FFmpeg.
+- Les flux sont copiés sans réencodage (`-c copy`).
+- Les fichiers actifs sont d'abord écrits en `.ts.part`.
+- Un arrêt normal finalise le TS puis tente une conversion MP4 avec validation `ffprobe`.
+- Le TS source n'est supprimé qu'après validation du MP4 ; en cas d'échec, le TS est conservé.
+- Une interruption laisse le `.ts.part` pour récupération.
+- Les reconnexions FFmpeg sont illimitées par défaut (`SPREC_FFMPEG_MAX_RECONNECTS=0`).
 
-## Tolérance aux erreurs
+## Version moteur
 
-Le recorder utilise notamment :
-
-- `-fflags +discardcorrupt+genpts`
-- `-err_detect ignore_err`
-- `-avoid_negative_ts make_non_negative`
-- `-muxpreload 0 -muxdelay 0`
-- `-c copy`
-
-Les erreurs comme `Packet corrupt`, `non-existing PPS`, `decode_slice_header`, `no frame` et les DTS non monotones sont conservées dans les logs. Elles ne sont pas masquées.
-
-Un fichier réellement en `RECORDING` doit avoir reçu des octets de FFmpeg. Pendant le démarrage ou une reconnexion, l'interface affiche `CONNECTING`/`RECONNECTING`, pas `RECORDING`.
-
-## Reconnexion
-
-Variables Docker :
-
-- `SPREC_RECORDING_START_TIMEOUT=30`
-- `SPREC_FFMPEG_STALL_TIMEOUT=45`
-- `SPREC_FFMPEG_RECONNECT_DELAY=5`
-- `SPREC_FFMPEG_MAX_RECONNECTS=0` (`0` = illimité tant que l'enregistrement reste demandé)
-
-## Récupération des `.ts.part`
-
-Au démarrage, SPRECORDER tente de récupérer les `.ts.part` non vides avec FFmpeg vers `*.ts.recovered.ts`.
-
-La récupération peut reconstruire uniquement les données que FFmpeg arrive encore à lire. Elle ne peut pas recréer des données H.264 réellement perdues ou des paquets absents.
-
-Une récupération manuelle est également disponible dans l'interface via **Récupérer les .ts.part** ou :
-
-`GET /record/recover`
-
-## Logs / interface
-
-Chaque enregistrement possède un log `logs/ffmpeg_*.log` contenant notamment :
-
-- tentatives FFmpeg ;
-- erreurs FFmpeg ;
-- reconnexions ;
-- taille écrite ;
-- durée ;
-- raison d'arrêt ;
-- destination finale ou conservation du `.ts.part`.
-
-L'interface affiche les mêmes compteurs pendant l'enregistrement.
-
-## Chemins TrueNAS
-
-Utiliser ces montages :
-
-- `/mnt/services/SPRECORDER/config` → `/data/config`
-- `/mnt/services/SPRECORDER/recordings` → `/data/recordings`
-- `/mnt/services/SPRECORDER/modules` → `/data/modules`
-- `/mnt/services/SPRECORDER/logs` → `/data/logs`
-
-Ne pas utiliser `/app/data/...` avec cette version.
-
-## Docker / architecture
-
-Cette image est explicitement construite pour `linux/amd64`, correspondant au TrueNAS indiqué (Intel Core i5-8250U).
-
-L'entrée du conteneur neutralise `LD_PRELOAD` et journalise l'architecture, l'architecture Debian, le chemin/version FFmpeg et `LD_LIBRARY_PATH` dans `logs/runtime.log`.
-
-Le message :
-
-`Inconsistency detected by ld.so: elf_machine_rela_relative...`
-
-est un problème du chargeur dynamique/glibc, pas une erreur HLS. Des cas Debian documentés montrent que ce message peut venir d'une bibliothèque ELF incohérente/corrompue et affecter plusieurs programmes, dont FFmpeg. Le conteneur est donc rendu déterministe (amd64 + Debian Bookworm + `LD_PRELOAD` vide) et effectue un préflight `ffmpeg -version` avant de démarrer le service.
-
-## Tests locaux inclus
-
-Les tests du dossier `tests/` vérifient :
-
-- croissance de `.ts.part` avant affichage de `RECORDING` ;
-- arrêt normal `.ts.part` → `.ts` ;
-- reconnexion après sortie FFmpeg ;
-- conservation d'un `.ts.part` après épuisement des reconnexions ;
-- absence de doublon pour un même modèle ;
-- plusieurs modèles simultanés ;
-- récupération d'un `.ts.part` lisible.
-
-## Build
-
-```bash
-docker build --platform linux/amd64 -t sprecorder:robust .
-```
-
-## GitHub Actions
-
-Le workflow publie `ghcr.io/salides/sprecorder:latest` pour `linux/amd64`.
+- SPRECORDER : `2.1.0-chantrail-0.4.8-beta`
+- ChanTrail : `0.4.8-beta` (image AMD64 épinglée par digest).
