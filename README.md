@@ -1,65 +1,47 @@
-# SPRECORDER 2.1.0 — TrueNAS + ChanTrail 0.4.8-beta
+# SPRECORDER 2.2.0 — moteur HLS autonome pour TrueNAS
 
-SPRECORDER reste l'application principale. Il conserve son interface de monitoring et son moteur d'enregistrement FFmpeg robuste. ChanTrail 0.4.8-beta est utilisé comme moteur amont pour résoudre et relayer les flux Stripchat via son endpoint HLS relay.
+Cette édition conserve l'interface, le moteur d'enregistrement FFmpeg, les reconnexions, les fichiers `.ts.part`, la récupération, la bibliothèque et la conversion MP4 de SPRECORDER 2.1.0. Elle ajoute un résolveur/proxy HLS Python intégré. Elle ne lance et ne télécharge aucun binaire ChanTrail.
 
-## Architecture
+## Test parallèle — installation actuelle préservée
 
-- `sprecorder` : interface SPRECORDER, monitoring, enregistrements FFmpeg, reconnexions, bibliothèque et conversion MP4.
-- `chantrail` : résolution Stripchat et HLS relay officiel ChanTrail 0.4.8-beta.
-- SPRECORDER récupère le flux via `http://chantrail:3030/stream/{model}`.
-- Le navigateur utilise le relay publié sur le port hôte `13030`.
-- Interface SPRECORDER : `http://IP_DU_NAS:18080`.
+Cette configuration est volontairement isolée :
+- interface de test : `http://IP_DU_NAS:18081` ;
+- proxy HLS : port `13031` ;
+- configuration dédiée : `/mnt/services/SPRECORDER/config-standalone-2.2` ;
+- logs dédiés : `/mnt/services/SPRECORDER/logs-standalone-2.2` ;
+- enregistrements : dossier actuel `/mnt/services/SPRECORDER/recordings`.
 
-## Données et compatibilité
+L'instance actuelle (`sprecorder-210`) et ChanTrail (`sprecorder-chantrail-048`) ne sont ni arrêtés ni supprimés. Le fichier de clés Mouflon est copié vers la configuration de test. La liste des modèles n'est pas copiée afin d'éviter qu'une deuxième instance démarre automatiquement les mêmes enregistrements.
 
-Les anciens fichiers ne sont pas supprimés. Les enregistrements sont conservés dans `/mnt/services/SPRECORDER/recordings`.
-
-La configuration ChanTrail 0.4.x est isolée dans `config-chantrail-0.4` et les modules dans `modules-chantrail-0.4`, car ChanTrail signale des incompatibilités entre les branches 0.3 et 0.4. Les anciens dossiers `config` et `modules` ne sont pas réutilisés.
-
-SPRECORDER conserve sa liste de modèles dans `config-chantrail-0.4/models.json`.
-
-## Déploiement TrueNAS
-
-Depuis le dossier contenant ce projet :
+Depuis le dossier extrait :
 
 ```bash
-mkdir -p /mnt/services/SPRECORDER/config-chantrail-0.4
-mkdir -p /mnt/services/SPRECORDER/recordings
-mkdir -p /mnt/services/SPRECORDER/modules-chantrail-0.4
-mkdir -p /mnt/services/SPRECORDER/logs-2.1.0
-mkdir -p /mnt/services/SPRECORDER/ts_fragment-chantrail-0.4
-docker compose config
-docker compose pull chantrail
-docker compose up -d --build
+chmod +x deploy.sh
+./deploy.sh
 ```
 
-Ouvrir `http://IP_DU_NAS:18080`.
+Ou manuellement :
 
-Au premier démarrage, vérifier dans les paramètres ChanTrail que le dossier de sortie est `/app/stripchat-recorder/recordings`.
+```bash
+sudo mkdir -p /mnt/services/SPRECORDER/config-standalone-2.2
+sudo mkdir -p /mnt/services/SPRECORDER/logs-standalone-2.2
+sudo install -m 600 /mnt/services/SPRECORDER/config-chantrail-0.4/mouflon_keys.json /mnt/services/SPRECORDER/config-standalone-2.2/mouflon_keys.json
+sudo docker compose config
+sudo docker compose up -d --build
+```
 
-## Diagnostic
+## Vérification
 
-Le bouton « Console » en bas à droite ouvre une console flottante. Elle affiche les dernières lignes de :
+```bash
+sudo docker logs --tail 100 sprecorder-standalone-220
+curl -fsS http://127.0.0.1:18081/health
+curl -fsS http://127.0.0.1:13031/health
+```
 
-- `sprecorder.log`
-- `chantrail.log`
-- `runtime.log`
-- `ffmpeg_*.log` et `recovery_*.log`
+Ajoute un modèle manuellement dans l'interface de test, lance d'abord le monitoring, puis un enregistrement court. Vérifie que le `.ts.part` grossit et que le fichier final est lisible. N'arrête pas l'ancienne instance tant que ce test réel n'est pas concluant.
 
-Endpoint JSON : `/debug/logs?limit=260`.
+## Mouflon et HLS
 
-Journaux persistants : `/mnt/services/SPRECORDER/logs-2.1.0`.
+Le relais lit le fichier `mouflon_keys.json` au format SPRECORDER `keys` ou au format brut `pkey2pdkey`. Il traite les marqueurs Mouflon v2, réécrit les URI HLS vers le proxy local et normalise les URL de segments `media-hls` vers le shard `b-hls` annoncé dans leur chemin.
 
-## Enregistrement
-
-- Les flux sont copiés sans réencodage (`-c copy`).
-- Les fichiers actifs sont d'abord écrits en `.ts.part`.
-- Un arrêt normal finalise le TS puis tente une conversion MP4 avec validation `ffprobe`.
-- Le TS source n'est supprimé qu'après validation du MP4 ; en cas d'échec, le TS est conservé.
-- Une interruption laisse le `.ts.part` pour récupération.
-- Les reconnexions FFmpeg sont illimitées par défaut (`SPREC_FFMPEG_MAX_RECONNECTS=0`).
-
-## Version moteur
-
-- SPRECORDER : `2.1.0-chantrail-0.4.8-beta`
-- ChanTrail : `0.4.8-beta` (image AMD64 épinglée par digest).
+**Limite de validation :** les tests automatiques couvrent la syntaxe Python, le déchiffrement v2 avec vecteur synthétique, la normalisation d'URL, la réécriture HLS, le démarrage HTTP du relais et les tests de robustesse de l'enregistreur. Je n'ai pas pu exécuter un build Docker ni un enregistrement Stripchat réel depuis cet environnement. Cette version est donc une candidate de test isolée, pas une version certifiée en production.
