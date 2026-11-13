@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SPRECORDER v3 — Bibliothèque</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#11141b;color:#e8eaf0}
+*{box-sizing:border-box}body{margin:0}main{max-width:1160px;margin:0 auto;padding:30px 22px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap}h1{font-size:23px;margin:0}h2{font-size:17px;margin:12px 0}.sub{color:#aab2c4;font-size:13px;margin-top:5px}.actions{display:flex;gap:10px;align-items:center}a.link,button{background:#293142;color:#f4f6fc;border:1px solid #475067;border-radius:10px;padding:10px 14px;font-size:14px;text-decoration:none;cursor:pointer}a.link:hover,button:hover{background:#384660}section{margin-top:30px}input{width:100%;padding:13px;background:#1c2230;border:1px solid #3b4761;border-radius:10px;color:#fff;font-size:15px}#files{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-top:17px}.item{border:1px solid #2f384a;border-radius:12px;background:#1b202c;padding:16px;min-width:0}.item strong{display:block;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;font-size:14px}.meta{color:#9ba7bc;font-size:12px;margin-top:9px}.play{margin-top:12px;background:#2b4963;border:0}.summary{color:#aab2c4;font-size:13px;padding:12px 0}video{width:100%;max-height:65vh;background:#000;border-radius:12px}.hidden{display:none}dialog{max-width:900px;width:calc(100% - 28px);border:1px solid #3c4760;background:#141924;color:#fff;border-radius:14px;padding:20px}dialog::backdrop{background:rgba(0,0,0,.85)}.modalHead{display:flex;justify-content:space-between;gap:8px;align-items:center}.filename{overflow-wrap:anywhere;font-size:14px;color:#c1d2e5;margin:6px 0 16px}#events{font-size:12px;color:#aab2c4;padding:12px;background:#1a202d;border-radius:10px;white-space:pre-wrap;line-height:1.8}
+</style>
+</head><body><main>
+<header><div><h1>SPRECORDER <span style="color:#84bee6">v3.0</span></h1><div class="sub">Bibliothèque MP4 et conversion automatique des TS terminés</div></div><div class="actions"><a id="recorder" class="link" href="#" target="_blank" rel="noopener">Gérer les enregistrements</a><button onclick="refresh()">Actualiser</button></div></header>
+<section><input id="search" placeholder="Rechercher un modèle ou un fichier…" aria-label="Rechercher dans la bibliothèque"><div id="summary" class="summary">Chargement…</div><div id="files"></div></section>
+<section><h2>État de la conversion</h2><div id="events">Chargement…</div></section>
+<dialog id="player"><div class="modalHead"><h2>Lecture</h2><button onclick="closePlayer()">Fermer</button></div><div id="filename" class="filename"></div><video id="video" controls playsinline preload="metadata"></video></dialog>
+</main><script>
+const port=13032;
+document.getElementById('recorder').href=location.protocol+'//'+location.hostname+':'+port+'/';
+let all=[];
+const human=n=>n>=1e9?(n/1e9).toFixed(2)+' Go':n>=1e6?(n/1e6).toFixed(1)+' Mo':(n/1000).toFixed(0)+' Ko';
+const when=n=>new Date(n*1000).toLocaleString('fr-FR');
+function render(){const query=document.getElementById('search').value.trim().toLowerCase();const visible=all.filter(x=>x.path.toLowerCase().includes(query));document.getElementById('summary').textContent=all.length+' MP4 dans la bibliothèque · '+visible.length+' résultat(s)';const grid=document.getElementById('files');grid.replaceChildren();if(!visible.length){const d=document.createElement('p');d.className='sub';d.textContent='Aucun fichier MP4 pour le moment.';grid.append(d);return;}for(const f of visible){const card=document.createElement('div');card.className='item';const title=document.createElement('strong');title.textContent=f.name;title.title=f.path;const meta=document.createElement('div');meta.className='meta';meta.textContent=(f.source==='history'?'Historique · ':'Nouveau · ')+human(f.size)+' · '+when(f.modified);const play=document.createElement('button');play.className='play';play.textContent='Lire la vidéo';play.onclick=()=>playFile(f);card.append(title,meta,play);grid.append(card);}}
+function playFile(f){const video=document.getElementById('video');document.getElementById('filename').textContent=f.path;video.src='/video?path='+encodeURIComponent(f.path);document.getElementById('player').showModal();}
+function closePlayer(){const video=document.getElementById('video');video.pause();video.removeAttribute('src');video.load();document.getElementById('player').close();}
+document.getElementById('player').addEventListener('close',()=>{const v=document.getElementById('video');v.pause();v.removeAttribute('src');v.load();});
+async function refresh(){try{const [files,state]=await Promise.all([fetch('/api/files').then(r=>r.json()),fetch('/api/status').then(r=>r.json())]);all=files.files||[];render();const last=(state.events||[]).slice(-8).reverse().map(e=>e.at+' · '+e.kind+' · '+e.message).join('\n');document.getElementById('events').textContent=(state.active?'Conversion : '+state.active+'\n':'')+'Conversions réussies depuis le démarrage : '+state.converted+'\n'+(last||'Aucune opération récente.');}catch(e){document.getElementById('summary').textContent='Impossible de joindre la bibliothèque : '+e;}}
+document.getElementById('search').addEventListener('input',render);refresh();setInterval(refresh,30000);
+</script></body></html>

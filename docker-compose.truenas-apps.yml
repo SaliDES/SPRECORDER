@@ -1,0 +1,48 @@
+# À coller dans TrueNAS SCALE > Apps > Discover > Custom App > Install via YAML
+# Prérequis : image GHCR v3.0.0 construite et accessible, dossiers NAS créés.
+name: sprecorder-v3
+services:
+  recorder:
+    image: chantrail/stripchat-recorder:beta
+    platform: linux/amd64
+    container_name: sprecorder-v3-recorder
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Paris
+      LANGUAGE: en-US
+      PORT: "3030"
+    ports:
+      - "13032:3030"
+    volumes:
+      - /mnt/services/SPRECORDER-v3/config:/app/stripchat-recorder/config
+      - /mnt/services/SPRECORDER-v3/recordings:/app/stripchat-recorder/recordings
+      - /mnt/services/SPRECORDER-v3/modules:/app/stripchat-recorder/modules
+      - /mnt/services/SPRECORDER-v3/logs:/app/stripchat-recorder/logs
+    security_opt:
+      - no-new-privileges:true
+
+  library:
+    image: ghcr.io/salides/sprecorder:3.0.0
+    platform: linux/amd64
+    container_name: sprecorder-v3-library
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Paris
+      SPREC_RECORDINGS: /recordings
+      SPREC_STATE: /state
+      SPREC_HISTORY: /history
+      SPREC_PORT: "8080"
+      SPREC_ENGINE_PORT: "13032"
+      SPREC_SCAN_SECONDS: "30"
+      SPREC_SETTLE_SECONDS: "180"
+      SPREC_MIN_TS_BYTES: "65536"
+    ports:
+      - "18082:8080"
+    volumes:
+      - /mnt/services/SPRECORDER-v3/recordings:/recordings
+      - /mnt/services/SPRECORDER-v3/state:/state
+      - /mnt/services/SPRECORDER/recordings:/history:ro
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - recorder

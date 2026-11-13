@@ -1,27 +1,51 @@
+name: sprecorder-v3
 services:
-  sprecorder-standalone:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      platforms: [linux/amd64]
-    image: sprecorder:2.2.0-standalone
-    container_name: sprecorder-standalone-220
+  recorder:
+    # Le moteur officiel gère les playlists HLS, Mouflon, monitoring et fragments.
+    image: chantrail/stripchat-recorder:beta
+    platform: linux/amd64
+    container_name: sprecorder-v3-recorder
     restart: unless-stopped
     environment:
       TZ: Europe/Paris
-      SPREC_HOST: 0.0.0.0
-      SPREC_PORT: "8080"
-      SPREC_BACKEND: http://127.0.0.1:13031
-      SPREC_RELAY_PORT: "13031"
-      SPREC_DATA_DIR: /data
-      SPREC_RECORDING_START_TIMEOUT: "30"
-      SPREC_FFMPEG_STALL_TIMEOUT: "45"
-      SPREC_FFMPEG_RECONNECT_DELAY: "5"
-      SPREC_FFMPEG_MAX_RECONNECTS: "0"
+      LANGUAGE: en-US
+      PORT: "3030"
     ports:
-      - "18081:8080"
-      - "13031:13031"
+      - "13032:3030"
     volumes:
-      - /mnt/services/SPRECORDER/config-standalone-2.2:/data/config
-      - /mnt/services/SPRECORDER/recordings:/data/recordings
-      - /mnt/services/SPRECORDER/logs-standalone-2.2:/data/logs
+      - /mnt/services/SPRECORDER-v3/config:/app/stripchat-recorder/config
+      - /mnt/services/SPRECORDER-v3/recordings:/app/stripchat-recorder/recordings
+      - /mnt/services/SPRECORDER-v3/modules:/app/stripchat-recorder/modules
+      - /mnt/services/SPRECORDER-v3/logs:/app/stripchat-recorder/logs
+    security_opt:
+      - no-new-privileges:true
+
+  library:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sprecorder-library:3.0.0
+    platform: linux/amd64
+    container_name: sprecorder-v3-library
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Paris
+      SPREC_RECORDINGS: /recordings
+      SPREC_STATE: /state
+      SPREC_HISTORY: /history
+      SPREC_PORT: "8080"
+      SPREC_ENGINE_PORT: "13032"
+      SPREC_SCAN_SECONDS: "30"
+      SPREC_SETTLE_SECONDS: "180"
+      SPREC_MIN_TS_BYTES: "65536"
+    ports:
+      - "18082:8080"
+    volumes:
+      - /mnt/services/SPRECORDER-v3/recordings:/recordings
+      - /mnt/services/SPRECORDER-v3/state:/state
+      # Historique existant visible dans la bibliothèque, STRICTEMENT en lecture seule.
+      - /mnt/services/SPRECORDER/recordings:/history:ro
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - recorder
