@@ -39,5 +39,5 @@ jobs:
           push: true
           tags: |
             ghcr.io/salides/sprecorder:latest
-            ghcr.io/salides/sprecorder:3.0.0
+            ghcr.io/salides/sprecorder:4.0.0
             ghcr.io/salides/sprecorder:${{ github.sha }}
