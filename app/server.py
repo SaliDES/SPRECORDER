@@ -27,7 +27,7 @@ class API(BaseHTTPRequestHandler):
     engine:Engine
     tokens:dict[str,tuple[float,str]]={}
     token_lock=threading.Lock()
-    server_version="SPRECORDER/4.1"
+    server_version="SPRECORDER/4.2"
 
     def log_message(self,fmt,*args):
         LOG.info("%s %s",self.address_string(),fmt%args)
@@ -52,7 +52,7 @@ class API(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         try:
-            if path=="/health": return self.respond({"ok":True,"version":"4.1.0-independent"})
+            if path=="/health": return self.respond({"ok":True,"version":"4.2.0-independent"})
             if path=="/api/status": return self.respond(self.engine.status())
             if path=="/api/files": return self.respond({"files":self.engine.list_files()})
             if path.startswith("/avatar/"):
@@ -112,13 +112,11 @@ class API(BaseHTTPRequestHandler):
                 self.engine.stop_record(model); return self.respond({"ok":True})
             if path=="/api/settings":
                 self.engine.set_quality(int(data.get("quality",0))); return self.respond({"ok":True})
+            if path=="/api/convert/all":
+                return self.respond({"ok":True,"batch":self.engine.bulk.start_all()},202)
             if path=="/api/convert":
                 rel=str(data.get("path", ""))
-                if not rel.startswith("new/"): return self.fail("Conversion de l'historique interdite",403)
-                p=self.engine.file_path(rel)
-                if p.suffix.lower()!=".ts": raise ValueError("Fichier TS attendu")
-                done=self.engine.converter.convert(p,bypass_age_for_test=False)
-                return self.respond({"ok":done,"message":"Conversion lancée et terminée" if done else "TS conservé : voir journal"})
+                return self.respond({"ok":True,"batch":self.engine.bulk.start_one(rel)},202)
             return self.fail("Route inconnue",404)
         except (ValueError,KeyError,OSError) as exc:
             return self.fail(exc,400)

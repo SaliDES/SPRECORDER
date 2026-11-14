@@ -17,11 +17,13 @@ from urllib.parse import urlsplit, urlunsplit
 try:
     from . import streaming
     from .converter import Converter
+    from .bulk_convert import BulkConversion
     from .thumbnail import Thumbnailer
     from .profile_images import ProfileImages
 except ImportError:
     import streaming
     from converter import Converter
+    from bulk_convert import BulkConversion
     from thumbnail import Thumbnailer
     from profile_images import ProfileImages
 
@@ -115,7 +117,11 @@ class Engine:
         self.quality=0
         self.running=threading.Event()
         self.running.set()
-        self.converter=Converter(RECORDINGS, STATE / "conversions",settle=180,scan_seconds=30)
+        self.conversion_gate = threading.Lock()
+        self.converter=Converter(RECORDINGS, STATE / "conversions",settle=180,scan_seconds=30,
+                                 gate=self.conversion_gate)
+        self.bulk = BulkConversion(RECORDINGS,HISTORY,HISTORY_V3,STATE/"conversions",
+                                   gate=self.conversion_gate)
         self.thumbnails=Thumbnailer(STATE / "thumbnails")
         self.profile_images=ProfileImages(STATE / "avatars")
         self._load()
@@ -142,10 +148,10 @@ class Engine:
 
     def status(self):
         with self.lock:
-            return {"version":"4.1.0-independent","recordings":[j.snapshot() for j in self.jobs.values()],
+            return {"version":"4.2.0-independent","recordings":[j.snapshot() for j in self.jobs.values()],
                     "monitored":[{"model":k,"auto":v.get("auto",False),"info":self.infos.get(k)} for k,v in sorted(self.monitored.items())],
                     "quality":self.quality,"events":list(self.events)[-30:],
-                    "conversion":self.converter.status()}
+                    "conversion":self.converter.status(),"bulk_conversion":self.bulk.status()}
 
     def add_model(self,model:str,auto:bool=False):
         model=safe_public_name(model)
@@ -402,7 +408,9 @@ class Engine:
                         if p.is_symlink() or not p.is_file() or any(x.startswith('.') for x in p.relative_to(root).parts): continue
                         rel=p.relative_to(root)
                         st=p.stat()
-                        out.append({"name":p.name,"path":source+"/"+str(rel),"source":source,
+                        key=source+"/"+str(rel)
+                        out.append({"name":p.name,"path":key,"source":source,
+                                    "converted": self.bulk.already_done(key) if p.suffix.lower()==".ts" else False,
                                     "size":st.st_size,"modified":int(st.st_mtime),"type":p.suffix[1:]})
             except OSError as exc:
                 self.log("warning",f"Bibliothèque {source}: {exc}")

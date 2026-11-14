@@ -67,7 +67,8 @@ class Observation:
 
 class Converter:
     def __init__(self, root: Path, state: Path, *, settle: int = SETTLE_SECONDS,
-                 minimum: int = MIN_TS_BYTES, scan_seconds: int = SCAN_SECONDS):
+                 minimum: int = MIN_TS_BYTES, scan_seconds: int = SCAN_SECONDS,
+                 gate: threading.Lock | None = None):
         self.root = root.resolve()
         self.state = state
         self.settle = settle
@@ -76,6 +77,7 @@ class Converter:
         self.seen: dict[str, Observation] = {}
         self.retry_after: dict[str, float] = {}
         self.mu = threading.Lock()
+        self.gate = gate or threading.Lock()
         self.info = {"version": VERSION, "active": None, "last_success": None,
                      "last_error": None, "converted": 0, "events": []}
 
@@ -142,6 +144,10 @@ class Converter:
         return old.checks >= 2 and now - old.first_seen >= self.scan_seconds * 0.75
 
     def convert(self, source: Path, *, bypass_age_for_test: bool = False) -> bool:
+        with self.gate:
+            return self._convert_locked(source, bypass_age_for_test=bypass_age_for_test)
+
+    def _convert_locked(self, source: Path, *, bypass_age_for_test: bool = False) -> bool:
         """Remux atomically; never remove TS on any failure or file mutation."""
         try:
             if source.is_symlink() or source.suffix.lower() != ".ts":
