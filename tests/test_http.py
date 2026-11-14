@@ -1,58 +1,38 @@
-import importlib.util
-import os
-import subprocess
-import sys
-import tempfile
-import threading
-import unittest
-import urllib.request
+import json,sys,threading,unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import urlopen, Request
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'app'))
+import server
 
-MODULE = Path(__file__).resolve().parents[1] / 'app' / 'sprecorder.py'
-spec = importlib.util.spec_from_file_location('sprecorder_http', MODULE)
-m = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = m
-spec.loader.exec_module(m)
+class FakeEngine:
+    quality=0
+    def __init__(self):self.models=[]
+    def status(self):return {'version':'4.0.0-independent','monitored':[],'recordings':[],'events':[]}
+    def list_files(self):return []
+    def add_model(self,model,auto):self.models.append((model,auto))
 
-
-class HttpTests(unittest.TestCase):
+class HTTPTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix='sprec-library-')
-        self.addCleanup(self.tmp.cleanup)
-        root = Path(self.tmp.name) / 'recordings'
-        root.mkdir()
-        old = Path(self.tmp.name) / 'historical'
-        old.mkdir()
-        self.src = old / 'archived_20261101_100000.mp4'
-        subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
-                        '-f', 'lavfi', '-i', 'color=c=red:s=160x90:r=10', '-t', '2',
-                        '-threads', '1', '-c:v', 'libx264', str(self.src)], check=True, timeout=30)
-        m.HISTORY = old
-        m.Handler.converter = m.Converter(root, Path(self.tmp.name) / 'state')
-        m.Handler.index_file = MODULE.with_name('index.html')
-        self.server = ThreadingHTTPServer(('127.0.0.1', 0), m.Handler)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-        self.addCleanup(self.server.server_close)
-        self.addCleanup(self.server.shutdown)
-        self.url = 'http://127.0.0.1:%d' % self.server.server_port
+        server.API.engine=FakeEngine()
+        self.srv=ThreadingHTTPServer(('127.0.0.1',0),server.API)
+        self.t=threading.Thread(target=self.srv.serve_forever,daemon=True);self.t.start()
+        self.base=f'http://127.0.0.1:{self.srv.server_port}'
+    def tearDown(self):self.srv.shutdown();self.srv.server_close();self.t.join()
+    def test_health_status_ui_same_port(self):
+        for path in ('/health','/api/status'):
+            with urlopen(self.base+path) as resp:self.assertEqual(resp.status,200)
+        with urlopen(self.base+'/') as resp:
+            self.assertIn(b'Enregistrement automatique',resp.read())
+    def test_post_models(self):
+        req=Request(self.base+'/api/model/add',data=b'{"model":"Test123","auto":true}',headers={'Content-Type':'application/json'},method='POST')
+        with urlopen(req) as resp:self.assertEqual(resp.status,200)
+        self.assertEqual(server.API.engine.models,[('Test123',True)])
+    def test_cross_origin_forbidden(self):
+        req=Request(self.base+'/api/model/add',data=b'{"model":"Test123","auto":true}',headers={'Origin':'https://attack.example'},method='POST')
+        with self.assertRaises(HTTPError) as context:urlopen(req)
+        self.assertEqual(context.exception.code,403)
+        self.assertFalse(server.API.engine.models)
 
-    def test_history_and_ranges(self):
-        data = urllib.request.urlopen(self.url + '/api/files', timeout=5).read().decode()
-        self.assertIn('history/archived_20261101_100000.mp4', data)
-        req = urllib.request.Request(
-            self.url + '/video?path=history/archived_20261101_100000.mp4',
-            headers={'Range': 'bytes=0-7'})
-        with urllib.request.urlopen(req, timeout=5) as res:
-            self.assertEqual(res.status, 206)
-            self.assertEqual(len(res.read()), 8)
-            self.assertTrue(res.headers.get('Content-Range', '').startswith('bytes 0-7/'))
-
-    def test_reject_traversal(self):
-        with self.assertRaises(urllib.error.HTTPError) as ctx:
-            urllib.request.urlopen(self.url + '/video?path=new/../../etc/passwd', timeout=5)
-        self.assertEqual(ctx.exception.code, 404)
-
-if __name__ == '__main__':
-    unittest.main()
+if __name__=='__main__': unittest.main()

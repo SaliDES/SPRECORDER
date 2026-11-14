@@ -1,0 +1,22 @@
+services:
+  sprecorder:
+    image: ghcr.io/salides/sprecorder:4.0.0
+    container_name: sprecorder-v4
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Paris
+      PORT: "8080"
+      SPREC_DATA_DIR: /data
+      SPREC_HISTORY: /history
+      SPREC_HISTORY_V3: /history-v3
+      SPREC_MONITOR_SECONDS: "45"
+      SPREC_STALL_SECONDS: "600"
+    ports:
+      - "18083:8080"
+    volumes:
+      - /mnt/services/SPRECORDER-v4:/data
+      - /mnt/services/SPRECORDER/recordings:/history:ro
+      - /mnt/services/SPRECORDER-v3/recordings:/history-v3:ro
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 120s

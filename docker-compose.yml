@@ -1,51 +1,23 @@
-name: sprecorder-v3
 services:
-  recorder:
-    # Le moteur officiel gère les playlists HLS, Mouflon, monitoring et fragments.
-    image: chantrail/stripchat-recorder:beta
-    platform: linux/amd64
-    container_name: sprecorder-v3-recorder
+  sprecorder:
+    build: .
+    image: ghcr.io/salides/sprecorder:4.0.0
+    container_name: sprecorder-v4
     restart: unless-stopped
     environment:
       TZ: Europe/Paris
-      LANGUAGE: en-US
-      PORT: "3030"
-    ports:
-      - "13032:3030"
-    volumes:
-      - /mnt/services/SPRECORDER-v3/config:/app/stripchat-recorder/config
-      - /mnt/services/SPRECORDER-v3/recordings:/app/stripchat-recorder/recordings
-      - /mnt/services/SPRECORDER-v3/modules:/app/stripchat-recorder/modules
-      - /mnt/services/SPRECORDER-v3/logs:/app/stripchat-recorder/logs
-    security_opt:
-      - no-new-privileges:true
-
-  library:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: sprecorder-library:3.0.0
-    platform: linux/amd64
-    container_name: sprecorder-v3-library
-    restart: unless-stopped
-    environment:
-      TZ: Europe/Paris
-      SPREC_RECORDINGS: /recordings
-      SPREC_STATE: /state
+      PORT: "8080"
+      SPREC_DATA_DIR: /data
       SPREC_HISTORY: /history
-      SPREC_PORT: "8080"
-      SPREC_ENGINE_PORT: "13032"
-      SPREC_SCAN_SECONDS: "30"
-      SPREC_SETTLE_SECONDS: "180"
-      SPREC_MIN_TS_BYTES: "65536"
+      SPREC_HISTORY_V3: /history-v3
+      SPREC_MONITOR_SECONDS: "45"
+      SPREC_STALL_SECONDS: "600"
     ports:
-      - "18082:8080"
+      - "18083:8080"
     volumes:
-      - /mnt/services/SPRECORDER-v3/recordings:/recordings
-      - /mnt/services/SPRECORDER-v3/state:/state
-      # Historique existant visible dans la bibliothèque, STRICTEMENT en lecture seule.
+      - /mnt/services/SPRECORDER-v4:/data
       - /mnt/services/SPRECORDER/recordings:/history:ro
+      - /mnt/services/SPRECORDER-v3/recordings:/history-v3:ro
     security_opt:
       - no-new-privileges:true
-    depends_on:
-      - recorder
+    stop_grace_period: 120s

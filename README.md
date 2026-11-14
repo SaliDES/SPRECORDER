@@ -1,162 +1,138 @@
-# SPRECORDER v3 — moteur ChanTrail + conversion TS → MP4 fiable
+# SPRECORDER v4.0 — application indépendante « tout-en-un »
 
-**Version :** `3.0.0-chantrail-engine-converter`  
-**NAS cible :** TrueNAS SCALE x86_64 / Docker Compose  
-**Dépôt prévu :** https://github.com/SaliDES/SPRECORDER
+**Une application, une interface Web, un conteneur, un seul port (18083).**
 
-## Ce qui change
+### Interfaces de la même page
 
-Cette version ne recrée **pas** le proxy HLS Python expérimental de la version 2.2.
-Elle utilise directement l'image officielle `chantrail/stripchat-recorder:beta` pour :
+- **Enregistreur** : démarrage/arrêt manuel, progression en temps réel, prévisualisation HLS.
+- **Auto-record** : ajout de modèles, surveillance de leur direct public, démarrage automatique.
+- **Bibliothèque** : MP4 de SPRECORDER + anciens fichiers 2.1 et v3 en lecture seule,
+  lecture des MP4 dans un lecteur intégré et conversion manuelle des nouveaux TS.
+- **Journal/réglages** : événements d'erreur, conversion, qualité vidéo.
 
-- vérifier si les modèles sont en direct et lancer/arrêter automatiquement l'enregistrement ;
-- résoudre les playlists HLS et télécharger les segments depuis les CDN ;
-- gérer le déchiffrement Mouflon `pkey -> pdkey` ;
-- enregistrer les segments en `.ts` et les fusionner avec FFmpeg ;
-- fournir une interface Web pour ajouter les modèles et gérer le monitoring.
+Aucune dépendance à un conteneur, un binaire ou un service ChanTrail. La logique
+réseau et l'enregistrement sont implémentés dans `app/streaming.py` et
+`app/engine.py` ; l'interface HTML+JS réside dans `app/static/index.html`.
+L'interpréteur Python, FFmpeg et une copie locale de hls.js sont embarqués dans
+**notre propre image** Docker.
 
-SPRECORDER ajoute le service `library` (code Python fourni dans `app/`) :
+## Enregistrement
 
-- détecte **uniquement les TS finaux** de type `nom_YYYYMMDD_HHMMSS.ts` ;
-- ignore les fragments de travail et les `.ts.part` ;
-- attend au moins 180 secondes depuis la dernière écriture et deux scans stables ;
-- remuxe en MP4 avec `ffmpeg -c copy` (pas de réencodage) ;
-- contrôle les pistes vidéo et les durées avec `ffprobe` ;
-- publie un MP4 complet sans écraser un fichier existant ;
-- supprime le TS **uniquement après validation et publication** du MP4 ;
-- garde le TS en cas d'échec, de manque de place ou de changement du fichier ;
-- propose une bibliothèque Web lisant les MP4, avec recherche, lecture et prise en charge du seeking HTTP Range ;
-- affiche les MP4 historiques en lecture seule, sans jamais les convertir/supprimer.
+1. `https://stripchat.com/api/front/v1/broadcasts/<pseudo>` fournit le `streamName`.
+2. `.../api/front/v2/models/<streamName>/cam` fournit les statuts public/live et
+   l'identifiant numérique du modèle.
+3. `_auto.m3u8` fournit les renditions et les couples `psch/pkey` Mouflon.
+4. La qualité choisie récupère la playlist média. La bonne clé est sélectionnée
+   parmi les clés configurées dans `config/mouflon_keys.json`.
+5. Les balises `#EXT-X-MOUFLON:URI` sont traitées ; le segment d'initialisation
+   fMP4 est associé à chaque fragment MP4 téléchargé et converti en TS via FFmpeg.
+6. Des fragments `.ts` sont conservés dans un dossier `.work_...` jusqu'à l'arrêt.
+   Après arrêt, FFmpeg crée un TS complet, puis un MP4 sans réencodage.
+7. **Le TS final est supprimé uniquement si FFprobe confirme le MP4, avec durée
+   cohérente, et si le TS n'a pas changé.** Si une étape échoue, le TS et/ou les
+   fragments sont conservés.
+8. Si un dossier de fragments d'une session interrompue existe au redémarrage,
+   SPRECORDER tente de récupérer le TS et de le convertir avant de relancer le
+   monitoring automatique.
 
-**Attention :** le moteur ChanTrail est un projet externe. Son code Rust **n'est pas recopié dans cette archive** : il est utilisé via son image Docker publiée. Le code complet de l'intégration SPRECORDER et du convertisseur, lui, est inclus dans le ZIP. Pour disposer aussi du code de capture, consulter le dépôt officiel cité ci-dessous. Cela évite de prétendre fournir un moteur indépendant qui n'aurait pas été testé.
+Le polling automatique s'effectue toutes les 45 secondes. Si aucun fragment
+n'arrive pendant 10 minutes, la session s'arrête et les fragments déjà présents
+sont finalisés. Un bouton Stop arrête aussi l'auto-record pour ce modèle afin
+qu'il ne redémarre pas au cycle suivant.
 
-## Ce que fait vraiment ChanTrail (code source consulté)
+### Clés Mouflon
 
-Références officielles :
+Le fichier `config/mouflon_keys.json` peut contenir :
 
-- https://github.com/ChanTrail/StripchatRecorder/blob/master/backend/src/streaming/stripchat.rs
-- https://github.com/ChanTrail/StripchatRecorder/blob/master/backend/src/recording/hls.rs
-- https://github.com/ChanTrail/StripchatRecorder/blob/master/backend/src/recording/recorder.rs
-
-Dans `streaming/stripchat.rs`, le client Rust résout l'état du modèle, l'URL de playlist et utilise plusieurs domaines CDN possibles. `recording/hls.rs` analyse les playlists et la directive `#EXT-X-MOUFLON:PSCH`; si une clé est reconnue, le token d'URL dans `#EXT-X-MOUFLON:URI` est déchiffré par Base64 inverse puis XOR avec SHA256 de la clé `pdkey`. `recording/recorder.rs` télécharge les fragments fMP4, les transforme en `.ts` avec FFmpeg, puis les fusionne en fin de session au format choisi dans les paramètres (`ts`, `mp4`, `mkv`). Le moteur supprime le dossier de fragments seulement après une fusion réussie. **Nous ne substituons pas FFmpeg directement aux URL Mouflon**, ce qui évite l'erreur HTTP 404 rencontrée avec l'ancien relais maison.
-
-## Déploiement sur TrueNAS
-
-### 1. Publier le ZIP sur GitHub
-
-Le contenu du ZIP est **la racine du nouveau dépôt SPRECORDER** : `docker-compose.yml`, `docker-compose.truenas-apps.yml`, `Dockerfile`, `app/`, `tests/`, `.github/workflows/`, etc.
-
-Si vous remplacez la branche `main` de votre dépôt existant, remplacez aussi les fichiers et l'ancien workflow `.github` qui ciblait l'image expérimentale, sinon il continuera à tourner inutilement. Conservez l'historique Git pour pouvoir revenir en arrière.
-
-### 2. Créer les nouveaux dossiers, isolés des anciens
-
-```sh
-sudo mkdir -p /mnt/services/SPRECORDER-v3/{config,recordings,modules,logs,state}
+```json
+{"pkey2pdkey":{"CLE_PKEY":"CLE_PDKEY"}}
 ```
 
-Si votre ancien moteur ChanTrail fonctionnait avec un fichier Mouflon, réutilisez **uniquement** ce fichier (ne recopiez pas `settings.json` : incompatibilités entre versions possibles) :
+Ces valeurs sont des **exemples**, pas des clés réelles. Une capture peut échouer
+si la liste ne contient pas de clé adaptée au flux actuel. Tu peux copier ton
+fichier de clés existant depuis ton ancienne installation si tu en as les droits.
 
-```sh
-if [ -f /mnt/services/SPRECORDER/config-chantrail-0.4/mouflon_keys.json ]; then
-  sudo install -m 600 \
-    /mnt/services/SPRECORDER/config-chantrail-0.4/mouflon_keys.json \
-    /mnt/services/SPRECORDER-v3/config/mouflon_keys.json
+## Publication dans le dépôt GitHub
+
+L'archive ZIP est prévue pour le dépôt :
+https://github.com/SaliDES/SPRECORDER
+
+Sur Mac (dans un dossier de travail vierge) :
+
+```bash
+cd ~/Downloads
+git clone https://github.com/SaliDES/SPRECORDER.git SPRECORDER-v4-upload
+cd SPRECORDER-v4-upload
+# Attention : enlève les anciennes sources suivies, uniquement dans ce nouveau clone.
+git rm -r .
+unzip -o ../SPRECORDER-v4-independant.zip -d .
+git add -A
+git commit -m "SPRECORDER v4 independent all-in-one"
+git push origin main
+```
+
+**Important :** si Git garde d'anciens workflows dans `.github/workflows`, supprime
+les workflows v3 pour ne pas publier les deux images en parallèle. Le ZIP contient
+`.github/workflows/build.yml`, qui publie :
+
+`ghcr.io/salides/sprecorder:4.0.0` et `ghcr.io/salides/sprecorder:latest`.
+
+Dans GitHub Actions : vérifier que le workflow **Publish SPRECORDER v4** est vert.
+Dans GitHub Packages : mettre l'image en visibilité publique si nécessaire.
+
+## Installation TrueNAS SCALE
+
+**1. Préparer le dossier sans modifier les anciens enregistrements :**
+
+```bash
+sudo mkdir -p /mnt/services/SPRECORDER-v4/{config,recordings,state}
+```
+
+**2. Copier les clés existantes, si présentes :**
+
+```bash
+if sudo test -f /mnt/services/SPRECORDER/config-chantrail-0.4/mouflon_keys.json; then
+  sudo cp -n /mnt/services/SPRECORDER/config-chantrail-0.4/mouflon_keys.json \
+    /mnt/services/SPRECORDER-v4/config/mouflon_keys.json
 fi
 ```
 
-### 3A. Installation directe dans TrueNAS Apps — recommandée si vous utilisez l'éditeur YAML
+**3. Vérifier que l'image existe :**
 
-1. Pousser le contenu du ZIP (y compris `.github/workflows/sprecorder-v3.yml`) dans la branche `main` de `https://github.com/SaliDES/SPRECORDER`.
-2. Vérifier l'exécution réussie de l'action GitHub `Build SPRECORDER v3 converter`. Elle publie l'image `ghcr.io/salides/sprecorder:3.0.0`. Si le paquet GHCR est privé, rendre le paquet **public** dans GitHub Packages, ou configurer une authentification GHCR sur TrueNAS.
-3. Dans TrueNAS **Apps > Custom App > Install via YAML**, coller **`docker-compose.truenas-apps.yml`**. Ce fichier n'a pas de `build:` ; TrueNAS télécharge les deux images.
-4. Ouvrir l'interface moteur `http://IP-DU-NAS:13032` et appliquer l'étape 4 ci-dessous.
-
-Ne collez **pas** le `docker-compose.yml` de développement (contenant `build:`) dans TrueNAS Apps. Vous pouvez le lancer en SSH comme décrit juste après.
-
-### 3B. Installation en SSH / Docker Compose (alternative)
-
-Après avoir poussé le ZIP dans `https://github.com/SaliDES/SPRECORDER` :
-
-```sh
-cd /mnt/services
-sudo git clone --branch main --single-branch \
-  https://github.com/SaliDES/SPRECORDER.git SPRECORDER-v3-app
-cd /mnt/services/SPRECORDER-v3-app
-sudo docker compose -f docker-compose.yml config
-sudo docker compose -f docker-compose.yml up -d --build
+```bash
+sudo docker pull ghcr.io/salides/sprecorder:4.0.0
 ```
 
-Si le dossier `SPRECORDER-v3-app` existe déjà, ne le reclonez pas : utiliser `sudo git -C /mnt/services/SPRECORDER-v3-app pull --ff-only` depuis la copie existante.
+**4. TrueNAS → Apps → Custom App → Install via YAML :**
 
-### 4. Configuration à faire UNE FOIS dans l'interface du moteur
+Coller le contenu du fichier `TRUENAS-APPS.yml` inclus dans le ZIP.
 
-- Ouvrir `http://IP-DU-NAS:13032` (ChanTrail dédié à SPRECORDER v3).
-- Dans **Settings**, choisir impérativement **Merge format = `ts`**, afin de produire les fichiers TS finaux que le convertisseur SPRECORDER prendra en charge. Vérifier également le répertoire de sortie `recordings`.
-- Ajouter les modèles à surveiller et activer leur enregistrement automatique.
-- Si la liste de clés Mouflon ne fonctionne pas, vérifier sa configuration/synchronisation dans cette même interface.
+**5. Ouvrir :** `http://IP-DU-NAS:18083`.
 
-**Important :** si vous laissez **Merge format = `mp4`** (valeur par défaut de ChanTrail), le moteur produira déjà directement des MP4. La bibliothèque les verra, mais la conversion TS → MP4 supplémentaire ne sera simplement pas nécessaire.
+La v4 cohabite avec les installations 2.1, 2.2 et v3. Elle ne les remplace pas.
+Les anciens dossiers d'enregistrement montés sous `/history` et `/history-v3`
+le sont **en lecture seule**. Les nouvelles captures vont exclusivement dans
+`/mnt/services/SPRECORDER-v4/recordings`.
 
-### 5. Utilisation
-
-- **Monitoring / démarrer / arrêter** : `http://IP-DU-NAS:13032`
-- **Bibliothèque SPRECORDER MP4** : `http://IP-DU-NAS:18082`
-
-La bibliothèque analyse les MP4 du nouveau dossier `/mnt/services/SPRECORDER-v3/recordings` et **lit aussi** les MP4 historiques de `/mnt/services/SPRECORDER/recordings` grâce à un montage `:ro`.
-
-Le moteur officiel conserve ses propres métadonnées de fichiers TS dans son interface d'enregistrements ; après conversion externe, certains liens de cette interface peuvent donc désigner l'ancien TS. **La bibliothèque SPRECORDER sur le port 18082 est l'interface à utiliser pour lire les MP4 convertis.**
-
-### 6. Vérifications
-
-```sh
-sudo docker ps --filter name=sprecorder-v3
-curl -fsS http://127.0.0.1:18082/health
-sudo docker logs --tail 80 sprecorder-v3-recorder
-sudo docker logs --tail 80 sprecorder-v3-library
-find /mnt/services/SPRECORDER-v3/recordings -type f \( -name '*.mp4' -o -name '*.ts' \) -printf '%p %s octets\n' | tail -20
-```
-
-Après la première session complète : vérifier que le TS final apparaît, puis que le MP4 est lisible et que **seul ce TS final** a disparu. Le moteur officiel gère le monitoring ; le convertisseur ne décide jamais de l'arrêt ou du redémarrage des streams.
-
-## Nettoyage des essais 2.2
-
-Le script `scripts/nettoyer-essais-2.2.sh` affiche d'abord ce qui sera supprimé :
-
-```sh
-bash scripts/nettoyer-essais-2.2.sh
-```
-
-Après avoir vérifié que les nouveaux services fonctionnent et que les enregistrements historiques sont toujours accessibles :
-
-```sh
-bash scripts/nettoyer-essais-2.2.sh --apply
-```
-
-**Ce nettoyage ne touche PAS :** `sprecorder-210`, `sprecorder-chantrail-048`, les dossiers `recordings` historiques, les clés d'origine ChanTrail, et les nouveaux dossiers `SPRECORDER-v3`.
-
-Le script supprime seulement le conteneur expérimental `sprecorder-standalone-220`, son image si elle existe, le clone `SPRECORDER-standalone-2.2` et les **deux** dossiers distincts `config-standalone-2.2` et `logs-standalone-2.2`. Les clés d'essai contenues dans ce dossier de configuration sont donc supprimées. Sauvegarder ce dossier si besoin.
+Ne pas utiliser `docker compose down -v`. Ne jamais supprimer
+`/mnt/services/SPRECORDER/recordings` ni les données de la v3.
 
 ## Tests
 
-Tests indépendants du NAS :
+Pour le code source, depuis le dossier contenant `app/` :
 
-```sh
+```bash
 python3 -m unittest discover -s tests -v
 ```
 
-Ils nécessitent `ffmpeg` et `ffprobe` installés. Ils vérifient la vraie conversion d'un TS H.264/AAC, la suppression uniquement après réussite, la conservation d'un TS invalide, la non-modification d'un MP4 existant et l'exclusion des fragments en cours.
+Ces tests génèrent un exemple fMP4 avec FFmpeg, testent la conversion réelle en TS
+puis en MP4, une session simulée de bout en bout, les playlists et la sécurité
+HTTP. Il faut FFmpeg et FFprobe installés. L'image Docker n'a pas été construite
+ici et **aucun vrai live Stripchat n'a été testé ici** : ce sont des validations
+hors ligne et non une garantie de fonctionnement de toutes les diffusions.
 
-**Limite de validation :** les tests de conversion ont été exécutés sur des médias synthétiques. Ni le moteur Docker `beta`, ni la capture d'un vrai stream depuis le NAS n'ont pu être exécutés dans l'environnement de création de cette archive. Il faudra valider une session de bout en bout sur le NAS avant d'effacer les essais précédents.
+## Licence
 
-## Sécurité et stockage
-
-- Déploiement à réserver au réseau local : les deux interfaces ne proposent pas d'authentification supplémentaire dans ce paquet.
-- Ne pas publier les ports `13032` et `18082` directement sur Internet.
-- Le fichier de clés Mouflon reste sur le NAS, **ne jamais l'ajouter à Git**.
-- Le TS et le MP4 coexistent temporairement : prévoyez environ deux fois la taille d'un enregistrement le temps de sa conversion.
-- Le convertisseur n'écrase aucun MP4 existant et ne touche pas aux enregistrements historiques.
-- Ne jamais lancer `docker compose down -v`, `docker system prune --volumes` ou un `rm -rf` sur `/mnt/services/SPRECORDER/recordings`.
-
-## Licence / attribution
-
-Moteur de capture : [ChanTrail/StripchatRecorder](https://github.com/ChanTrail/StripchatRecorder), sous GPL-3.0, image Docker publiée séparément. Le projet SPRECORDER v3 ajoute son propre service Python. Pour étudier ou modifier directement le moteur, partir du dépôt source upstream, respecter ses obligations de licence et ne pas supposer que l'image Docker `beta` est une reproduction vérifiée de la branche `master`.
+GPL-3.0 pour SPRECORDER. Voir `LICENSE` et `SOURCE-NOTES.md` pour les crédits
+ChanTrail et hls.js. N'enregistre que des diffusions dont tu es autorisé à
+conserver les images et respecte les conditions du service.
