@@ -1,6 +1,6 @@
 services:
   sprecorder:
-    image: ghcr.io/salides/sprecorder:4.0.0
+    image: ghcr.io/salides/sprecorder:4.1.0
     container_name: sprecorder-v4
     restart: unless-stopped
     environment:

@@ -1,138 +1,57 @@
-# SPRECORDER v4.0 — application indépendante « tout-en-un »
+# SPRECORDER v4.1 — cartes modèles et bibliothèque illustrée
 
-**Une application, une interface Web, un conteneur, un seul port (18083).**
+**Une application indépendante, une interface Web, un conteneur, un port (`18083`).**
 
-### Interfaces de la même page
+Cette version **met à jour la v4 existante sans changer le moteur HLS qui fonctionne** (`app/streaming.py` et `app/engine.py` conservent leur processus de capture TS → MP4). Elle n'utilise aucun conteneur ChanTrail.
 
-- **Enregistreur** : démarrage/arrêt manuel, progression en temps réel, prévisualisation HLS.
-- **Auto-record** : ajout de modèles, surveillance de leur direct public, démarrage automatique.
-- **Bibliothèque** : MP4 de SPRECORDER + anciens fichiers 2.1 et v3 en lecture seule,
-  lecture des MP4 dans un lecteur intégré et conversion manuelle des nouveaux TS.
-- **Journal/réglages** : événements d'erreur, conversion, qualité vidéo.
+## Nouveautés
 
-Aucune dépendance à un conteneur, un binaire ou un service ChanTrail. La logique
-réseau et l'enregistrement sont implémentés dans `app/streaming.py` et
-`app/engine.py` ; l'interface HTML+JS réside dans `app/static/index.html`.
-L'interpréteur Python, FFmpeg et une copie locale de hls.js sont embarqués dans
-**notre propre image** Docker.
+- Ajout d'un nombre libre de modèles, **sans lancer de capture et avec auto-record désactivé par défaut**.
+- Cartes par modèle, chacune avec pseudo, photo de profil **si l'API publique fournit une URL de photo**, statut direct/hors ligne, aperçu vidéo HLS intégré sur la carte, bouton démarrer/arrêter l'enregistrement et interrupteur auto-record indépendant.
+- Photo de profil : on utilise les champs `avatarUrl`/`avatar`/`profileImageUrl` et équivalents quand présents, et l'aperçu public comme solution de repli. La récupération se fait par un relais photo HTTPS interne (les restrictions d’affichage direct sont ainsi évitées). Si aucune image n'est fournie, une icône avec l'initiale du pseudo s'affiche ; nous n'inventons pas d'URL de photo.
+- Prévisualisations ouvertes **à la demande**, pas à l'ajout ; l'actualisation du statut toutes les 5 s **ne reconstruit pas les lecteurs**.
+- Monitoring de listes longues avec un nombre limité de requêtes concurrentes (8 au maximum).
+- Bibliothèque en cartes : miniature 16:9 générée depuis les MP4/TS avec FFmpeg, puis nom, type, taille, date, lecture ou conversion. La génération est à la demande et le résultat mis en cache sous `/data/state/thumbnails`. Les anciens enregistrements en lecture seule ne sont jamais modifiés.
+- Conversion TS → MP4 inchangée : le TS n'est supprimé qu'après vérification du MP4.
 
-## Enregistrement
+## Mise à jour depuis SPRECORDER v4.0 déjà installée
 
-1. `https://stripchat.com/api/front/v1/broadcasts/<pseudo>` fournit le `streamName`.
-2. `.../api/front/v2/models/<streamName>/cam` fournit les statuts public/live et
-   l'identifiant numérique du modèle.
-3. `_auto.m3u8` fournit les renditions et les couples `psch/pkey` Mouflon.
-4. La qualité choisie récupère la playlist média. La bonne clé est sélectionnée
-   parmi les clés configurées dans `config/mouflon_keys.json`.
-5. Les balises `#EXT-X-MOUFLON:URI` sont traitées ; le segment d'initialisation
-   fMP4 est associé à chaque fragment MP4 téléchargé et converti en TS via FFmpeg.
-6. Des fragments `.ts` sont conservés dans un dossier `.work_...` jusqu'à l'arrêt.
-   Après arrêt, FFmpeg crée un TS complet, puis un MP4 sans réencodage.
-7. **Le TS final est supprimé uniquement si FFprobe confirme le MP4, avec durée
-   cohérente, et si le TS n'a pas changé.** Si une étape échoue, le TS et/ou les
-   fragments sont conservés.
-8. Si un dossier de fragments d'une session interrompue existe au redémarrage,
-   SPRECORDER tente de récupérer le TS et de le convertir avant de relancer le
-   monitoring automatique.
+1. Télécharge et décompresse le ZIP **SPRECORDER-v4.1-independant.zip** sur ton Mac.
+2. Publie les fichiers dans ta branche `main` du dépôt `https://github.com/SaliDES/SPRECORDER`. **Attention :** le dossier caché `.github/workflows` est indispensable à la publication de l'image.
+3. Attends que le workflow **Publish SPRECORDER v4.1** soit vert dans GitHub Actions et que `ghcr.io/salides/sprecorder:4.1.0` soit disponible.
+4. Sur TrueNAS, teste :
+   ```bash
+   sudo docker pull ghcr.io/salides/sprecorder:4.1.0
+   ```
+5. **Édite l'application existante `sprecorder-v4` dans TrueNAS Apps**, remplace `image: ghcr.io/salides/sprecorder:4.0.0` par `image: ghcr.io/salides/sprecorder:4.1.0`, et applique. Ne crée **pas** une deuxième application sur le même port `18083`.
+6. Ouvre `http://IP-DU-NAS:18083`, recharge la page en ignorant le cache si nécessaire.
 
-Le polling automatique s'effectue toutes les 45 secondes. Si aucun fragment
-n'arrive pendant 10 minutes, la session s'arrête et les fragments déjà présents
-sont finalisés. Un bouton Stop arrête aussi l'auto-record pour ce modèle afin
-qu'il ne redémarre pas au cycle suivant.
+Le `TRUENAS-APPS.yml` fourni contient déjà l'image `4.1.0`. Il conserve les mêmes volumes :
+`/mnt/services/SPRECORDER-v4:/data`, les anciens enregistrements `/history` et `/history-v3` en lecture seule, le même conteneur `sprecorder-v4` et le même port `18083:8080`.
 
-### Clés Mouflon
-
-Le fichier `config/mouflon_keys.json` peut contenir :
-
-```json
-{"pkey2pdkey":{"CLE_PKEY":"CLE_PDKEY"}}
-```
-
-Ces valeurs sont des **exemples**, pas des clés réelles. Une capture peut échouer
-si la liste ne contient pas de clé adaptée au flux actuel. Tu peux copier ton
-fichier de clés existant depuis ton ancienne installation si tu en as les droits.
-
-## Publication dans le dépôt GitHub
-
-L'archive ZIP est prévue pour le dépôt :
-https://github.com/SaliDES/SPRECORDER
-
-Sur Mac (dans un dossier de travail vierge) :
+### Publication Git via le terminal Mac
 
 ```bash
 cd ~/Downloads
-git clone https://github.com/SaliDES/SPRECORDER.git SPRECORDER-v4-upload
-cd SPRECORDER-v4-upload
-# Attention : enlève les anciennes sources suivies, uniquement dans ce nouveau clone.
+git clone https://github.com/SaliDES/SPRECORDER.git SPRECORDER-v41-upload
+cd SPRECORDER-v41-upload
 git rm -r .
-unzip -o ../SPRECORDER-v4-independant.zip -d .
+unzip -o ../SPRECORDER-v4.1-independant.zip -d .
 git add -A
-git commit -m "SPRECORDER v4 independent all-in-one"
+git commit -m "SPRECORDER 4.1 - model cards preview and thumbnails"
 git push origin main
 ```
 
-**Important :** si Git garde d'anciens workflows dans `.github/workflows`, supprime
-les workflows v3 pour ne pas publier les deux images en parallèle. Le ZIP contient
-`.github/workflows/build.yml`, qui publie :
+**Ne supprime pas** `/mnt/services/SPRECORDER-v4` : il contient déjà les nouveaux enregistrements et préférences. Ne supprime pas les anciennes installations.
 
-`ghcr.io/salides/sprecorder:4.0.0` et `ghcr.io/salides/sprecorder:latest`.
-
-Dans GitHub Actions : vérifier que le workflow **Publish SPRECORDER v4** est vert.
-Dans GitHub Packages : mettre l'image en visibilité publique si nécessaire.
-
-## Installation TrueNAS SCALE
-
-**1. Préparer le dossier sans modifier les anciens enregistrements :**
-
-```bash
-sudo mkdir -p /mnt/services/SPRECORDER-v4/{config,recordings,state}
-```
-
-**2. Copier les clés existantes, si présentes :**
-
-```bash
-if sudo test -f /mnt/services/SPRECORDER/config-chantrail-0.4/mouflon_keys.json; then
-  sudo cp -n /mnt/services/SPRECORDER/config-chantrail-0.4/mouflon_keys.json \
-    /mnt/services/SPRECORDER-v4/config/mouflon_keys.json
-fi
-```
-
-**3. Vérifier que l'image existe :**
-
-```bash
-sudo docker pull ghcr.io/salides/sprecorder:4.0.0
-```
-
-**4. TrueNAS → Apps → Custom App → Install via YAML :**
-
-Coller le contenu du fichier `TRUENAS-APPS.yml` inclus dans le ZIP.
-
-**5. Ouvrir :** `http://IP-DU-NAS:18083`.
-
-La v4 cohabite avec les installations 2.1, 2.2 et v3. Elle ne les remplace pas.
-Les anciens dossiers d'enregistrement montés sous `/history` et `/history-v3`
-le sont **en lecture seule**. Les nouvelles captures vont exclusivement dans
-`/mnt/services/SPRECORDER-v4/recordings`.
-
-Ne pas utiliser `docker compose down -v`. Ne jamais supprimer
-`/mnt/services/SPRECORDER/recordings` ni les données de la v3.
-
-## Tests
-
-Pour le code source, depuis le dossier contenant `app/` :
+### Tests hors ligne
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-Ces tests génèrent un exemple fMP4 avec FFmpeg, testent la conversion réelle en TS
-puis en MP4, une session simulée de bout en bout, les playlists et la sécurité
-HTTP. Il faut FFmpeg et FFprobe installés. L'image Docker n'a pas été construite
-ici et **aucun vrai live Stripchat n'a été testé ici** : ce sont des validations
-hors ligne et non une garantie de fonctionnement de toutes les diffusions.
+L'archive inclut le test de génération réelle de thumbnail JPEG avec FFmpeg et la vérification que les nouveaux modèles n'ont pas l'auto-record activé. Le moteur HLS n'a pas été réécrit. L'affichage des photos dépend des données publiques de chaque profil et d'éventuelles restrictions du serveur d'images.
 
-## Licence
+## Licence et sources
 
-GPL-3.0 pour SPRECORDER. Voir `LICENSE` et `SOURCE-NOTES.md` pour les crédits
-ChanTrail et hls.js. N'enregistre que des diffusions dont tu es autorisé à
-conserver les images et respecte les conditions du service.
+Projet GPL-3.0. Voir `LICENSE`, `SOURCE-NOTES.md` et `LICENSE-HLSJS-APACHE-2.0`. Ne conserve que les diffusions que tu es autorisé à enregistrer.

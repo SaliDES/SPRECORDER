@@ -111,6 +111,46 @@ def model_name(model: str) -> str:
     return model
 
 
+
+def profile_image(data: dict, model: str = "") -> str:
+    """Select a public profile photo from API responses without guessing user URLs.
+
+    Preview/snapshot is a fallback when the API exposes no separate avatar.
+    """
+    userblock = (data.get("user") or {}) if isinstance(data, dict) else {}
+    user = (userblock.get("user") or {}) if isinstance(userblock, dict) else {}
+    cam = data.get("cam") or {}
+    profile = user.get("profile") or {} if isinstance(user, dict) else {}
+    candidates = []
+    for obj in (user, profile, userblock, cam, data):
+        if not isinstance(obj, dict):
+            continue
+        for name in ("avatarUrl", "avatarURL", "avatar", "avatar_url", "profileImageUrl",
+                     "profilePictureUrl", "profileImage", "profilePicture", "imageUrl",
+                     "photoUrl", "pictureUrl", "photo", "image", "previewUrl", "snapshotUrl"):
+            value = obj.get(name)
+            if isinstance(value, dict):
+                value = value.get("url") or value.get("original") or value.get("medium")
+            if isinstance(value, str) and value.strip():
+                candidates.append(value.strip())
+    for value in candidates:
+        if value.startswith("//"):
+            value = "https:" + value
+        elif value.startswith("/") and not value.startswith("//"):
+            value = "https://stripchat.com" + value
+        try:
+            url = urlsplit(value)
+            host = (url.hostname or "").lower()
+            suffixes = ("stripchat.com", "strpst.com", "strpst.net", "doppiocdn.net",
+                        "doppiocdn.com", "stripcdn.com")
+            if (url.scheme == "https" and url.username is None and url.password is None
+                and url.port in (None, 443)
+                and any(host == domain or host.endswith("." + domain) for domain in suffixes)):
+                return value
+        except ValueError:
+            continue
+    return ""
+
 def get_stream_info(model: str) -> dict:
     model = model_name(model)
     b = json_api(f"https://stripchat.com/api/front/v1/broadcasts/{model}")
@@ -130,7 +170,7 @@ def get_stream_info(model: str) -> dict:
         raise ValueError("Identifiant de flux numérique manquant")
     return {"model": model, "stream_id": user_id, "live": live, "public": live and status == "public",
             "status": status, "viewers": user.get("viewersCount") or 0,
-            "thumbnail": user.get("previewUrl") or ""}
+            "thumbnail": user.get("previewUrl") or "", "avatar": profile_image(info, model)}
 
 
 def fetch_master(stream_id: str) -> tuple[str, str]:

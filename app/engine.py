@@ -17,9 +17,13 @@ from urllib.parse import urlsplit, urlunsplit
 try:
     from . import streaming
     from .converter import Converter
+    from .thumbnail import Thumbnailer
+    from .profile_images import ProfileImages
 except ImportError:
     import streaming
     from converter import Converter
+    from thumbnail import Thumbnailer
+    from profile_images import ProfileImages
 
 LOG = logging.getLogger("sprecorder.engine")
 DATA = Path(os.getenv("SPREC_DATA_DIR", "/data"))
@@ -112,6 +116,8 @@ class Engine:
         self.running=threading.Event()
         self.running.set()
         self.converter=Converter(RECORDINGS, STATE / "conversions",settle=180,scan_seconds=30)
+        self.thumbnails=Thumbnailer(STATE / "thumbnails")
+        self.profile_images=ProfileImages(STATE / "avatars")
         self._load()
         self.log("ready","SPRECORDER v4 démarré (moteur HLS intégré)")
         threading.Thread(target=self._startup,daemon=True,name="sprec-startup").start()
@@ -136,7 +142,7 @@ class Engine:
 
     def status(self):
         with self.lock:
-            return {"version":"4.0.0-independent","recordings":[j.snapshot() for j in self.jobs.values()],
+            return {"version":"4.1.0-independent","recordings":[j.snapshot() for j in self.jobs.values()],
                     "monitored":[{"model":k,"auto":v.get("auto",False),"info":self.infos.get(k)} for k,v in sorted(self.monitored.items())],
                     "quality":self.quality,"events":list(self.events)[-30:],
                     "conversion":self.converter.status()}
@@ -144,8 +150,12 @@ class Engine:
     def add_model(self,model:str,auto:bool=False):
         model=safe_public_name(model)
         with self.lock:
-            self.monitored[model]={"auto":bool(auto)}
-            self._save()
+            if model not in self.monitored:
+                self.monitored[model]={"auto":bool(auto)}
+                self._save()
+            else:
+                return  # Existing settings are preserved; adding never starts a recording.
+        threading.Thread(target=self._refresh_one,args=(model,),daemon=True,name="sprec-info-"+model).start()
         self.log("monitor",f"Modèle ajouté: {model}")
 
     def set_auto(self,model:str,auto:bool):
@@ -159,6 +169,8 @@ class Engine:
     def remove_model(self,model:str):
         model=safe_public_name(model)
         with self.lock:
+            if model in self.jobs:
+                raise ValueError("Arrête d’abord l’enregistrement de ce modèle")
             self.monitored.pop(model,None)
             self.infos.pop(model,None)
             self._save()
@@ -231,21 +243,41 @@ class Engine:
             except Exception as exc:
                 self.log("error", f"Récupération {folder.name}: {exc} (fragments conservés)")
 
+    def _refresh_one(self,model):
+        try:
+            info=streaming.get_stream_info(model)
+            with self.lock:
+                if model not in self.monitored: return
+                previous=self.infos.get(model) or {}
+                # Keep the last discovered picture when a temporary response lacks one.
+                if not info.get("avatar") and previous.get("avatar"):
+                    info["avatar"]=previous["avatar"]
+                self.infos[model]=info
+                auto=bool(self.monitored[model].get("auto",False))
+                already=model in self.jobs
+            if info.get("public") and auto and not already and self.running.is_set():
+                try: self.start_record(model)
+                except ValueError: pass
+        except Exception as exc:
+            with self.lock:
+                if model not in self.monitored: return
+                previous=self.infos.get(model) or {}
+                self.infos[model]={"live":None,"public":False,"status":"erreur réseau",
+                                   "error":str(exc),"avatar":previous.get("avatar","")}
+            self.log("warning",f"Surveillance {model}: {exc}")
+
     def _monitor_loop(self):
+        # A fixed concurrency limit prevents a long list from blocking the other models.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         while self.running.is_set():
             with self.lock:
-                models=[(m,opts.copy()) for m,opts in self.monitored.items()]
-            for model,opts in models:
-                if not self.running.is_set(): break
-                try:
-                    info=streaming.get_stream_info(model)
-                    with self.lock: self.infos[model]=info
-                    if info["public"] and opts.get("auto"):
-                        with self.lock: already=model in self.jobs
-                        if not already: self.start_record(model)
-                except Exception as exc:
-                    with self.lock: self.infos[model]={"live":None,"status":"erreur réseau","error":str(exc)}
-                    self.log("warning",f"Surveillance {model}: {exc}")
+                models=list(self.monitored)
+            if models:
+                with ThreadPoolExecutor(max_workers=min(8,len(models)),thread_name_prefix="sprec-status") as pool:
+                    futures=[pool.submit(self._refresh_one,m) for m in models]
+                    for future in as_completed(futures):
+                        try: future.result()
+                        except Exception as exc:self.log("warning",f"Monitoring: {exc}")
             for _ in range(POLL_SECONDS):
                 if not self.running.is_set(): break
                 time.sleep(1)
@@ -387,6 +419,18 @@ class Engine:
         if p!=candidate.absolute() or p.suffix.lower() not in (".mp4",".ts") or not p.is_file():
             raise ValueError("Fichier invalide")
         return p
+
+    def avatar(self, model: str):
+        model=safe_public_name(model)
+        with self.lock:
+            if model not in self.monitored: raise ValueError("Modèle non suivi")
+            info=self.infos.get(model) or {}
+            url=info.get("avatar") or ""
+        if not url: raise ValueError("Photo indisponible")
+        return self.profile_images.get(url)
+
+    def thumbnail(self, relative: str) -> bytes:
+        return self.thumbnails.get(self.file_path(relative))
 
     def shutdown(self):
         self.running.clear()

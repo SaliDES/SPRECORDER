@@ -27,7 +27,7 @@ class API(BaseHTTPRequestHandler):
     engine:Engine
     tokens:dict[str,tuple[float,str]]={}
     token_lock=threading.Lock()
-    server_version="SPRECORDER/4.0"
+    server_version="SPRECORDER/4.1"
 
     def log_message(self,fmt,*args):
         LOG.info("%s %s",self.address_string(),fmt%args)
@@ -52,9 +52,15 @@ class API(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         try:
-            if path=="/health": return self.respond({"ok":True,"version":"4.0.0-independent"})
+            if path=="/health": return self.respond({"ok":True,"version":"4.1.0-independent"})
             if path=="/api/status": return self.respond(self.engine.status())
             if path=="/api/files": return self.respond({"files":self.engine.list_files()})
+            if path.startswith("/avatar/"):
+                from urllib.parse import unquote
+                return self.avatar(unquote(path[len("/avatar/"):]))
+            if path.startswith("/thumbnail/"):
+                from urllib.parse import unquote
+                return self.thumbnail(unquote(path[len("/thumbnail/"):]))
             if path.startswith("/media/"):
                 from urllib.parse import unquote
                 return self.video(unquote(path[len("/media/"):]))
@@ -176,6 +182,25 @@ class API(BaseHTTPRequestHandler):
         if not entry or entry[0]<time.time(): return self.fail("Segment HLS expiré",404)
         raw,_,ctype=streaming.fetch(entry[1])
         return self.send_data(raw,ctype or "video/mp4")
+
+    def avatar(self,model):
+        try:
+            data,ctype=self.engine.avatar(model)
+        except (ValueError, OSError, RuntimeError) as exc:
+            LOG.debug("Profile photo unavailable for %s: %s",model,exc)
+            return self.fail("Photo indisponible",404)
+        except Exception as exc:
+            LOG.warning("Profile image %s: %s",model,exc)
+            return self.fail("Photo indisponible",404)
+        return self.send_data(data,ctype)
+
+    def thumbnail(self,rel):
+        try:
+            blob=self.engine.thumbnail(rel)
+        except (ValueError, OSError, RuntimeError) as exc:
+            LOG.debug("Thumbnail unavailable for %s: %s",rel,exc)
+            return self.fail("Miniature indisponible",404)
+        self.send_data(blob,"image/jpeg",extra={"Vary":"Accept"})
 
     def video(self,rel):
         p=self.engine.file_path(rel)
