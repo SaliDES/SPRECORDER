@@ -1,34 +1,53 @@
-# SPRECORDER v4.2 — Conversion globale des anciens TS
+# SPRECORDER v4.3.0 — Nettoyage vérifié des TS convertis
 
-Une interface Web, un conteneur, port 18083. Le moteur d’enregistrement HLS et les cartes de modèles de la v4.1 sont conservés.
+SPRECORDER reste une **application indépendante**, avec **une seule interface sur le port 18083**. Les cartes de modèles, la prévisualisation HLS, l'enregistrement manuel/automatique, la bibliothèque et la conversion MP4 des versions précédentes sont conservés.
 
-## Nouvelles fonctions
+## Nouvelle fonction : « Supprimer les TS convertis »
 
-- Dans **Bibliothèque**, bouton **« Convertir tous les TS »**, en haut de page.
-- Bouton **« Convertir en MP4 »** sur **chaque TS**, y compris les anciens fichiers `*.ts.recovered.ts` et `*.recovered.ts`.
-- Conversion en **arrière-plan**, séquentielle, sans bloquer la navigation ni les captures vidéo.
-- Barre de progression **globale visible en haut de l'application** : pourcentage pondéré par taille des TS, nombre de fichiers traités, succès, échecs et nom du fichier en cours.
-- Échecs enregistrés et conversion relançable ; aucun MP4 existant n'est écrasé.
-- Les dossiers anciens `/history` et `/history-v3` restent **en lecture seule**. Leurs nouveaux MP4 sont sauvegardés sous `/mnt/services/SPRECORDER-v4/recordings/imports/history/` ou `imports/history-v3/`. Les vieux TS ne sont pas supprimés.
-- Les nouveaux TS situés dans `/mnt/services/SPRECORDER-v4/recordings` sont supprimés **uniquement après** validation du MP4 avec FFprobe et contrôle de la durée et de l'intégrité du TS source.
-- Les fichiers encore en cours d'écriture et les fragments de sessions HLS sont ignorés. Un contrôle d’espace libre est effectué avant traitement.
+Dans **Bibliothèque**, le bouton rouge **« Supprimer les TS convertis »** :
 
-## Installation / mise à jour
+1. Examine les sources `.ts` et `.recovered.ts` (y compris `*.ts.recovered.ts`) et repère celles ayant un MP4 à l'emplacement attendu par SPRECORDER.
+2. Affiche une **estimation** du nombre de TS et de l'espace libérable (l'estimation peut inclure un MP4 illisible, qui sera protégé lors de la vérification).
+3. Demande une confirmation, puis une **saisie manuelle obligatoire** de `SUPPRIMER LES TS`.
+4. Traite les candidats **un à un en arrière-plan**, avec une **barre de progression de suppression** en haut de l'interface, un compteur de fichiers et d'octets libérés.
+5. Avant chaque suppression : valide l'existence du MP4, son en-tête, sa piste vidéo, son codec/résolution et sa durée avec FFprobe ; contrôle que le TS n'a pas été modifié pendant la vérification. Les fichiers encore récents, les symlinks et les fragments de capture sont ignorés.
+6. **Supprime uniquement le TS original** correspondant à un MP4 validé. Le MP4 ne sera jamais supprimé par cette fonction. Les TS sans MP4, les fichiers corrompus, récents ou en cours de conversion sont conservés.
 
-1. Extraire le ZIP v4.2 et remplacer les fichiers du dépôt `https://github.com/SaliDES/SPRECORDER` (y compris `.github/workflows/build.yml`).
-2. Laisser GitHub Actions publier `ghcr.io/salides/sprecorder:4.2.0`.
-3. TrueNAS : `sudo docker pull ghcr.io/salides/sprecorder:4.2.0`.
-4. **Modifier** l'application existante `sprecorder-v4` via Apps > Edit > YAML. Remplacer seulement le tag de l'image par `4.2.0`, ou utiliser `TRUENAS-APPS.yml` inclus. Les volumes sont inchangés.
-5. Ouvrir `http://IP-DU-NAS:18083`, onglet Bibliothèque, cliquer sur **Convertir tous les TS**.
+⚠️ La suppression est **définitive**. Il n'y a pas de corbeille. Vérifier les MP4, conserver une sauvegarde et éviter ce nettoyage pendant que les anciens enregistreurs historiques travaillent.
 
-Les fichiers historiques ne sont **pas** supprimés, car les dossiers historiques sont montés en lecture seule. Ainsi, tu peux vérifier les MP4 avant tout nettoyage manuel éventuel.
+## Mise à jour TrueNAS (important)
+
+1. Remplacer le contenu du dépôt `https://github.com/SaliDES/SPRECORDER` par ce ZIP, **y compris `.github/workflows/build.yml`**. Le commit sur `main` publiera les tags `4.3.0` et `latest`.
+2. Vérifier la réussite de GitHub Actions et tester :
+   `sudo docker pull ghcr.io/salides/sprecorder:4.3.0`
+3. Dans **TrueNAS Apps**, **modifier l'application existante `sprecorder-v4`** et utiliser le **fichier `TRUENAS-APPS.yml` fourni dans le ZIP**. Il ne suffit pas de changer le tag de l'image : la suppression historique requiert deux **nouveaux montages dédiés** en écriture, et deux variables d'environnement.
+4. Les volumes `/history:ro` et `/history-v3:ro` de consultation/lecture **restent en lecture seule**. Les nouveaux volumes `/history-clean:rw` et `/history-v3-clean:rw` correspondent aux mêmes dossiers hôtes et ne sont utilisés que pour le nettoyage explicitement déclenché. Vérifier que les permissions de fichiers TrueNAS autorisent la suppression.
+5. Accéder à `http://IP-DU-NAS:18083` → **Bibliothèque** → **Supprimer les TS convertis**.
+
+### Volumes (identiques à v4.2, sauf les montages de nettoyage supplémentaires)
+
+- `/mnt/services/SPRECORDER-v4:/data` : configuration, nouveaux enregistrements et MP4 importés.
+- `/mnt/services/SPRECORDER/recordings:/history:ro` : lecture des anciens fichiers.
+- `/mnt/services/SPRECORDER-v3/recordings:/history-v3:ro` : lecture des anciens fichiers v3.
+- `/mnt/services/SPRECORDER/recordings:/history-clean:rw` : **suppression confirmée** des anciens TS qui ont un MP4 validé.
+- `/mnt/services/SPRECORDER-v3/recordings:/history-v3-clean:rw` : idem pour la v3.
+
+**Sans les montages en écriture supplémentaires, les TS historiques ne seront pas supprimables**, par conception. Leur conversion et leur consultation restent possibles.
+
+## Garantie et limites
+
+La présence d'un MP4 n'est pas une preuve cryptographique que les vidéos sont identiques : la validation compare le média, son codec/résolution et sa durée. Pour une sécurité supplémentaire, vérifier visuellement les MP4 ou faire une sauvegarde avant le nettoyage groupé. Aucun effacement n'est garanti si un fichier est protégé par ACL ou si un volume TrueNAS reste en lecture seule.
+
+Les anciens enregistrements se convertissent toujours vers `/mnt/services/SPRECORDER-v4/recordings/imports/history/` et `imports/history-v3/` ; ils sont **conservés tant que tu n'utilises pas ce nouveau bouton**.
 
 ## Tests
 
-`python3 -m unittest discover -s tests -v`
+```bash
+python3 -m unittest discover -s tests -v
+```
 
-Les tests valident les conversions de `.ts`, `.recovered.ts`, l'import non destructif de fichiers historiques, la progression et le traitement des fichiers invalides.
+Tests hors ligne : conversion réelle FFmpeg, TS classiques et récupérés, refus d'effacer sans MP4 ou si MP4 invalide/durée différente, montages historiques en écriture opt-in, confirmation API, interface et fonctions d'enregistrement antérieures. La capture sur un vrai live et le montage dans TrueNAS n'ont pas été exécutés dans cet environnement.
 
 ## Licences
 
-GPL-3.0 ; attributions dans `SOURCE-NOTES.md`. Respecter les droits des auteurs et personnes filmées.
+GPL-3.0, attributions dans `SOURCE-NOTES.md`. Utiliser les enregistrements dans le respect des droits des personnes et des plateformes concernées.

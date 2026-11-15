@@ -18,12 +18,14 @@ try:
     from . import streaming
     from .converter import Converter
     from .bulk_convert import BulkConversion
+    from .cleanup import CleanupConverted
     from .thumbnail import Thumbnailer
     from .profile_images import ProfileImages
 except ImportError:
     import streaming
     from converter import Converter
     from bulk_convert import BulkConversion
+    from cleanup import CleanupConverted
     from thumbnail import Thumbnailer
     from profile_images import ProfileImages
 
@@ -122,6 +124,14 @@ class Engine:
                                  gate=self.conversion_gate)
         self.bulk = BulkConversion(RECORDINGS,HISTORY,HISTORY_V3,STATE/"conversions",
                                    gate=self.conversion_gate)
+        # Deletion is opt-in: separate writable mounts; the normal library
+        # history paths remain read-only.
+        cleanup_mounts = {
+            "history": Path(os.environ["SPREC_CLEAN_HISTORY"]) if os.getenv("SPREC_CLEAN_HISTORY") else None,
+            "history-v3": Path(os.environ["SPREC_CLEAN_HISTORY_V3"]) if os.getenv("SPREC_CLEAN_HISTORY_V3") else None,
+        }
+        self.cleanup = CleanupConverted(self.bulk, STATE / "conversions", cleanup_mounts,
+                                        gate=self.conversion_gate)
         self.thumbnails=Thumbnailer(STATE / "thumbnails")
         self.profile_images=ProfileImages(STATE / "avatars")
         self._load()
@@ -148,10 +158,11 @@ class Engine:
 
     def status(self):
         with self.lock:
-            return {"version":"4.2.0-independent","recordings":[j.snapshot() for j in self.jobs.values()],
+            return {"version":"4.3.0-independent","recordings":[j.snapshot() for j in self.jobs.values()],
                     "monitored":[{"model":k,"auto":v.get("auto",False),"info":self.infos.get(k)} for k,v in sorted(self.monitored.items())],
                     "quality":self.quality,"events":list(self.events)[-30:],
-                    "conversion":self.converter.status(),"bulk_conversion":self.bulk.status()}
+                    "conversion":self.converter.status(),"bulk_conversion":self.bulk.status(),
+                    "cleanup":self.cleanup.status()}
 
     def add_model(self,model:str,auto:bool=False):
         model=safe_public_name(model)

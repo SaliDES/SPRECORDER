@@ -27,7 +27,7 @@ class API(BaseHTTPRequestHandler):
     engine:Engine
     tokens:dict[str,tuple[float,str]]={}
     token_lock=threading.Lock()
-    server_version="SPRECORDER/4.2"
+    server_version="SPRECORDER/4.3"
 
     def log_message(self,fmt,*args):
         LOG.info("%s %s",self.address_string(),fmt%args)
@@ -52,9 +52,11 @@ class API(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         try:
-            if path=="/health": return self.respond({"ok":True,"version":"4.2.0-independent"})
+            if path=="/health": return self.respond({"ok":True,"version":"4.3.0-independent"})
             if path=="/api/status": return self.respond(self.engine.status())
             if path=="/api/files": return self.respond({"files":self.engine.list_files()})
+            if path=="/api/cleanup/preview":
+                return self.respond({"ok": True, "preview": self.engine.cleanup.preview()})
             if path.startswith("/avatar/"):
                 from urllib.parse import unquote
                 return self.avatar(unquote(path[len("/avatar/"):]))
@@ -113,10 +115,14 @@ class API(BaseHTTPRequestHandler):
             if path=="/api/settings":
                 self.engine.set_quality(int(data.get("quality",0))); return self.respond({"ok":True})
             if path=="/api/convert/all":
+                if self.engine.cleanup.status()["active"]: raise ValueError("Nettoyage en cours")
                 return self.respond({"ok":True,"batch":self.engine.bulk.start_all()},202)
             if path=="/api/convert":
+                if self.engine.cleanup.status()["active"]: raise ValueError("Nettoyage en cours")
                 rel=str(data.get("path", ""))
                 return self.respond({"ok":True,"batch":self.engine.bulk.start_one(rel)},202)
+            if path=="/api/cleanup/converted":
+                return self.respond({"ok":True,"cleanup":self.engine.cleanup.start(data.get("confirmation", ""))},202)
             return self.fail("Route inconnue",404)
         except (ValueError,KeyError,OSError) as exc:
             return self.fail(exc,400)

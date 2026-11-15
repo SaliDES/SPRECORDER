@@ -11,9 +11,19 @@ class FakeBulk:
     def start_all(self):self.requests.append('all');return {'active':True,'total':0}
     def start_one(self,key):self.requests.append(key);return {'active':True,'total':1}
 
+class FakeCleanup:
+    def __init__(self):self.requests=[]
+    def status(self):return {"active":False}
+    def preview(self):return {"files":0,"bytes":0}
+    def start(self,confirmation):
+        from cleanup import CONFIRMATION
+        if confirmation != CONFIRMATION: raise ValueError("Confirmation incorrecte")
+        self.requests.append(confirmation)
+        return {"active":True}
+
 class FakeEngine:
     quality=0
-    def __init__(self):self.models=[];self.bulk=FakeBulk()
+    def __init__(self):self.models=[];self.bulk=FakeBulk();self.cleanup=FakeCleanup()
     def status(self):return {'version':'4.0.0-independent','monitored':[],'recordings':[],'events':[]}
     def list_files(self):return []
     def add_model(self,model,auto):self.models.append((model,auto))
@@ -44,6 +54,18 @@ class HTTPTests(unittest.TestCase):
                 self.assertTrue(json.load(response)['ok'])
         self.assertEqual(server.API.engine.bulk.requests,
                          ['all','history/Model.ts.recovered.ts'])
+
+    def test_cleanup_preview_and_confirmation_required(self):
+        with urlopen(self.base+'/api/cleanup/preview') as resp:
+            self.assertEqual(json.load(resp)['preview']['files'],0)
+        wrong=Request(self.base+'/api/cleanup/converted',data=b'{"confirmation":"OUI"}',headers={'Content-Type':'application/json'},method='POST')
+        with self.assertRaises(HTTPError) as context:urlopen(wrong)
+        self.assertEqual(context.exception.code,400)
+        self.assertEqual(server.API.engine.cleanup.requests,[])
+        correct=Request(self.base+'/api/cleanup/converted',data=b'{"confirmation":"SUPPRIMER LES TS"}',headers={'Content-Type':'application/json'},method='POST')
+        with urlopen(correct) as resp:
+            self.assertEqual(resp.status,202)
+        self.assertEqual(server.API.engine.cleanup.requests,['SUPPRIMER LES TS'])
 
     def test_cross_origin_forbidden(self):
         req=Request(self.base+'/api/model/add',data=b'{"model":"Test123","auto":true}',headers={'Origin':'https://attack.example'},method='POST')

@@ -1,7 +1,7 @@
 services:
   sprecorder:
     build: .
-    image: ghcr.io/salides/sprecorder:4.2.0
+    image: ghcr.io/salides/sprecorder:4.3.0
     container_name: sprecorder-v4
     restart: unless-stopped
     environment:
@@ -12,12 +12,18 @@ services:
       SPREC_HISTORY_V3: /history-v3
       SPREC_MONITOR_SECONDS: "45"
       SPREC_STALL_SECONDS: "600"
+      SPREC_CLEAN_HISTORY: /history-clean
+      SPREC_CLEAN_HISTORY_V3: /history-v3-clean
     ports:
       - "18083:8080"
     volumes:
       - /mnt/services/SPRECORDER-v4:/data
       - /mnt/services/SPRECORDER/recordings:/history:ro
       - /mnt/services/SPRECORDER-v3/recordings:/history-v3:ro
+      # Dedicated writable mounts used only after explicit UI confirmation.
+      # Regular library mounts above remain read-only.
+      - /mnt/services/SPRECORDER/recordings:/history-clean:rw
+      - /mnt/services/SPRECORDER-v3/recordings:/history-v3-clean:rw
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 120s
