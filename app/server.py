@@ -27,7 +27,7 @@ class API(BaseHTTPRequestHandler):
     engine:Engine
     tokens:dict[str,tuple[float,str]]={}
     token_lock=threading.Lock()
-    server_version="SPRECORDER/4.3"
+    server_version="SPRECORDER/4.4"
 
     def log_message(self,fmt,*args):
         LOG.info("%s %s",self.address_string(),fmt%args)
@@ -52,9 +52,10 @@ class API(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         try:
-            if path=="/health": return self.respond({"ok":True,"version":"4.3.0-independent"})
+            if path=="/health": return self.respond({"ok":True,"version":"4.4.0-independent"})
             if path=="/api/status": return self.respond(self.engine.status())
             if path=="/api/files": return self.respond({"files":self.engine.list_files()})
+            if path=="/api/storage": return self.respond({"storage":self.engine.library_actions.disk_stats()})
             if path=="/api/cleanup/preview":
                 return self.respond({"ok": True, "preview": self.engine.cleanup.preview()})
             if path.startswith("/avatar/"):
@@ -114,6 +115,13 @@ class API(BaseHTTPRequestHandler):
                 self.engine.stop_record(model); return self.respond({"ok":True})
             if path=="/api/settings":
                 self.engine.set_quality(int(data.get("quality",0))); return self.respond({"ok":True})
+            if path=="/api/favorite":
+                return self.respond({"ok":True,"favorite":self.engine.set_favorite(
+                    str(data.get("path", "")), data.get("favorite"))})
+            if path=="/api/file/delete":
+                result = self.engine.delete_recording(str(data.get("path", "")),
+                                                     str(data.get("confirmation", "")))
+                return self.respond({"ok":True,"result":result})
             if path=="/api/convert/all":
                 if self.engine.cleanup.status()["active"]: raise ValueError("Nettoyage en cours")
                 return self.respond({"ok":True,"batch":self.engine.bulk.start_all()},202)

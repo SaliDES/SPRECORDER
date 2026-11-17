@@ -23,10 +23,18 @@ class FakeCleanup:
 
 class FakeEngine:
     quality=0
-    def __init__(self):self.models=[];self.bulk=FakeBulk();self.cleanup=FakeCleanup()
+    def __init__(self):
+        self.models=[];self.bulk=FakeBulk();self.cleanup=FakeCleanup()
+        self.library_actions=type('A',(),{'disk_stats':lambda _: {'new':{'total':100,'free':30,'used':70,'percent':70}}})()
+        self.fav_calls=[];self.deletions=[]
     def status(self):return {'version':'4.0.0-independent','monitored':[],'recordings':[],'events':[]}
     def list_files(self):return []
     def add_model(self,model,auto):self.models.append((model,auto))
+    def set_favorite(self,key,enabled):
+        self.fav_calls.append((key,enabled));return enabled
+    def delete_recording(self,key,confirmation):
+        if confirmation != 'SUPPRIMER ' + key:raise ValueError('Confirmation incorrecte')
+        self.deletions.append(key);return {'deleted':key,'bytes':12345}
 
 class HTTPTests(unittest.TestCase):
     def setUp(self):
@@ -66,6 +74,27 @@ class HTTPTests(unittest.TestCase):
         with urlopen(correct) as resp:
             self.assertEqual(resp.status,202)
         self.assertEqual(server.API.engine.cleanup.requests,['SUPPRIMER LES TS'])
+
+    def test_storage_favorite_and_delete_http_routes(self):
+        with urlopen(self.base+'/api/storage') as resp:
+            self.assertEqual(json.load(resp)['storage']['new']['free'],30)
+        payload=json.dumps({'path':'history/Old.recovered.ts','favorite':True}).encode()
+        req=Request(self.base+'/api/favorite',data=payload,
+                    headers={'Content-Type':'application/json'},method='POST')
+        with urlopen(req) as resp:self.assertTrue(json.load(resp)['favorite'])
+        self.assertEqual(server.API.engine.fav_calls,[('history/Old.recovered.ts',True)])
+        url=self.base+'/api/file/delete'
+        wrong=Request(url,data=json.dumps({'path':'history/Old.recovered.ts','confirmation':'OUI'}).encode(),
+                      headers={'Content-Type':'application/json'},method='POST')
+        with self.assertRaises(HTTPError) as err:urlopen(wrong)
+        self.assertEqual(err.exception.code,400)
+        self.assertEqual(server.API.engine.deletions,[])
+        good=Request(url,data=json.dumps({'path':'history/Old.recovered.ts',
+                                         'confirmation':'SUPPRIMER history/Old.recovered.ts'}).encode(),
+                     headers={'Content-Type':'application/json'},method='POST')
+        with urlopen(good) as resp:
+            self.assertEqual(json.load(resp)['result']['bytes'],12345)
+        self.assertEqual(server.API.engine.deletions,['history/Old.recovered.ts'])
 
     def test_cross_origin_forbidden(self):
         req=Request(self.base+'/api/model/add',data=b'{"model":"Test123","auto":true}',headers={'Origin':'https://attack.example'},method='POST')

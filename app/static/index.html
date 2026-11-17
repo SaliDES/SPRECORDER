@@ -21,6 +21,18 @@
 .cleanup-fill{height:100%;width:0%;background:#e17797;transition:width .25s}
 .cleanup-stats{overflow-wrap:anywhere;display:flex;gap:18px;flex-wrap:wrap;font-size:11px;color:#cbaeba;margin-top:10px}
 .cleanup-warning{color:#ebbacb;font-size:12px;line-height:1.5;margin:10px 0 0}
+
+/* v4.4 · disk space, personal library actions and persisted favorites */
+.disk-panel{background:linear-gradient(115deg,#14283a,#141e2e);border:1px solid #345168;border-radius:16px;padding:18px 21px;margin:0 0 23px;box-shadow:var(--shadow)}
+.disk-top{display:flex;align-items:center;gap:15px}.disk-icon{font-size:23px;color:#7dcbfe;background:#243c55;border-radius:12px;width:47px;height:47px;display:grid;place-items:center}
+.disk-title{flex:1;min-width:0;display:grid;gap:1px}.disk-label{font-size:11px;text-transform:uppercase;letter-spacing:1.4px;color:#98aec7}.disk-title strong{font-size:23px;font-weight:800;letter-spacing:-.6px}.disk-title small{font-size:11px;color:#99b2c9}.disk-state{font-size:11px;color:#93a6c0;text-align:right}
+.disk-track{height:8px;margin:15px 0 8px;background:#2b3e52;border-radius:99px;overflow:hidden}.disk-fill{height:100%;width:0;background:linear-gradient(90deg,#4aa4f5,#60d4c0);border-radius:inherit;transition:width .5s}.disk-panel.warning .disk-fill{background:linear-gradient(90deg,#ed9865,#e86078)}.disk-panel.warning .disk-title strong{color:#ffb1ac}
+.disk-others{font-size:11px;color:#869eb7;display:flex;gap:15px;flex-wrap:wrap}
+.library-filters{display:flex;align-items:center;flex-wrap:wrap;gap:13px}.library-filters .input{width:min(100%,390px)}.favorite-filter{display:flex;align-items:center;gap:8px;cursor:pointer;color:#cad7e6;padding:8px 12px;border-radius:10px;border:1px solid #374b63;background:#121f30;font-size:12px;font-weight:650}.favorite-filter:has(input:checked){border-color:#bb9851;background:#2b261e}.favorite-filter input{width:15px;height:15px;accent-color:#edc56d}.star-small{color:#f3c86b;font-size:17px}
+.file-cover .favorite-star{position:absolute;right:10px;top:10px;z-index:3;display:grid;place-items:center;min-width:38px;height:38px;border-radius:11px;background:#07101ddd;border:1px solid #56708b;color:#9daec0;font-size:26px;line-height:1;padding:0;transition:background .15s,border-color .15s}
+.file-cover .favorite-star:hover{background:#283e58;color:#f8d478}.file-cover .favorite-star.active{border-color:#c9a15a;background:#40311b;color:#ffcd64}
+.file-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid #304158;margin-top:12px;padding-top:10px}.file-footer small{color:#7d97b2;font-size:10px}.file-footer .btn{padding:6px 10px;font-size:11px}
+@media(max-width:650px){.disk-state{display:none}.disk-title strong{font-size:19px}.disk-panel{padding:15px}.library-filters .input{width:100%}}
 </style>
 </head>
 <body>
@@ -33,10 +45,15 @@
     <button class="tab" data-tab="library"><span class="tab-icon">▤</span> Bibliothèque</button>
     <button class="tab" data-tab="settings"><span class="tab-icon">⚙</span> Réglages & journal</button>
   </nav>
-  <div class="side-bottom"><div id="health" class="health"><span class="dot"></span> Connexion au serveur…</div><div class="build">SPRECORDER · v4.3.0</div></div>
+  <div class="side-bottom"><div id="health" class="health"><span class="dot"></span> Connexion au serveur…</div><div class="build">SPRECORDER · v4.4.0</div></div>
 </aside>
 <main class="main">
   <header class="top"><div><div class="overline">Tableau de bord · SPRECORDER</div><h1 id="page-title">Mes modèles</h1><p id="page-subtitle" class="description">Surveille tes modèles, prévisualise les directs et enregistre uniquement quand tu le décides.</p></div><button class="btn ghost" id="refresh" title="Actualiser">↻ <span class="desktop-text">Actualiser</span></button></header>
+  <section class="disk-panel" aria-label="Stockage des enregistrements" id="diskPanel">
+    <div class="disk-top"><div class="disk-icon">◫</div><div class="disk-title"><span class="disk-label">Espace disponible · enregistrements v4</span><strong id="diskFree">Vérification du stockage…</strong><small id="diskTotal">—</small></div><div class="disk-state" id="diskState">Actualisé toutes les 5 s</div></div>
+    <div class="disk-track" role="progressbar" id="diskTrack" aria-label="Occupation du disque des enregistrements" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="disk-fill" id="diskFill"></div></div>
+    <div class="disk-others" id="diskOthers"></div>
+  </section>
   <div id="bulkProgress" class="bulk-progress" hidden role="status" aria-live="polite" aria-atomic="false">
     <div class="bulk-head"><div><div class="bulk-title">Conversion MP4 · <strong id="bulkPercent">0 %</strong></div><div id="bulkMessage" class="bulk-sub">Préparation…</div></div><div class="bulk-title" id="bulkCounter">0 / 0 fichiers</div></div>
     <div class="bulk-track" role="progressbar" id="bulkTrack" aria-label="Progression de la conversion globale" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="bulk-fill" id="bulkFill"></div></div>
@@ -64,7 +81,7 @@
     <div class="models-grid" id="modelCards"><div class="empty">Chargement des modèles…</div></div>
   </section>
   <section id="tab-library" class="section">
-    <div class="panel"><div class="panel-head"><div><h2>Mes enregistrements</h2><p>Convertis tes anciens fichiers .ts et .recovered.ts en MP4. La conversion n'arrête pas les enregistrements en cours.</p></div><div class="library-actions"><button class="btn primary" id="convertAll">↻ Convertir tous les TS</button><button class="btn danger" id="deleteConverted">⌫ Supprimer les TS convertis</button><button class="btn sm ghost" id="filesRefresh">↻ Actualiser</button></div></div><input class="input" style="width:min(100%,390px)" id="fileFilter" placeholder="⌕ Rechercher une vidéo…" aria-label="Rechercher une vidéo"><p id="filesInfo" class="hint">Chargement…</p><p class="conversion-note">Les anciens TS sont conservés après conversion. Le bouton rouge peut supprimer uniquement les TS dont le MP4 a été vérifié. Les MP4 et les fichiers non convertis restent intacts. Les suppressions sont définitives.</p></div>
+    <div class="panel"><div class="panel-head"><div><h2>Mes enregistrements</h2><p>Convertis tes anciens fichiers .ts et .recovered.ts en MP4. La conversion n'arrête pas les enregistrements en cours.</p></div><div class="library-actions"><button class="btn primary" id="convertAll">↻ Convertir tous les TS</button><button class="btn danger" id="deleteConverted">⌫ Supprimer les TS convertis</button><button class="btn sm ghost" id="filesRefresh">↻ Actualiser</button></div></div><div class="library-filters"><input class="input" id="fileFilter" placeholder="⌕ Rechercher une vidéo…" aria-label="Rechercher une vidéo"><label class="favorite-filter"><input type="checkbox" id="favoritesOnly"> <span class="star-small">★</span> Favoris uniquement <span id="favoritesCount">(0)</span></label></div><p id="filesInfo" class="hint">Chargement…</p><p class="conversion-note">Les anciens TS sont conservés après conversion. Le bouton rouge peut supprimer uniquement les TS dont le MP4 a été vérifié. Les suppressions globales ne touchent qu'aux TS convertis. Chaque carte permet aussi une suppression manuelle définitive du fichier choisi, TS ou MP4, après confirmation.</p></div>
     <div class="library-grid" id="fileCards"></div>
   </section>
   <section id="tab-settings" class="section">
@@ -83,6 +100,21 @@ let statusData={monitored:[],recordings:[],events:[],conversion:{},bulk_conversi
 let lastBatchFinish=null, lastCleanupFinish=null;
 const cards=new Map(), previews=new Map();
 const byteSize=n=>n>=1e9?(n/1e9).toFixed(2)+' Go':n>=1e6?(n/1e6).toFixed(1)+' Mo':(n/1000).toFixed(0)+' Ko';
+function renderDisk(){
+ const storage=statusData.storage||{},primary=storage.new,panel=$('diskPanel');
+ if(!primary){$('diskFree').textContent='Stockage indisponible';$('diskTotal').textContent='Vérifie les volumes TrueNAS';$('diskState').textContent='Indisponible';return}
+ const pct=Math.max(0,Math.min(100,Number(primary.percent)||0));
+ $('diskFree').textContent=byteSize(primary.free)+' libres';
+ $('diskTotal').textContent=byteSize(primary.used)+' utilisés sur '+byteSize(primary.total)+' · '+pct.toFixed(1)+' % occupés';
+ $('diskFill').style.width=pct+'%';$('diskTrack').setAttribute('aria-valuenow',String(Math.round(pct)));
+ panel.classList.toggle('warning',pct>=90);$('diskState').textContent=pct>=90?'⚠ Disque presque plein':'Actualisé toutes les 5 s';
+ $('diskOthers').replaceChildren();
+ for(const [source,label] of [['history','Historique'],['history-v3','Historique v3']]){
+   const info=storage[source];if(!info)continue;
+   const el=txt('span',label+' : '+byteSize(info.free)+' libres');$('diskOthers').append(el);
+ }
+}
+
 const formatDate=n=>new Date(n*1000).toLocaleString('fr-FR',{dateStyle:'medium',timeStyle:'short'});
 const txt=(tag,text,cls)=>{const e=document.createElement(tag);e.textContent=String(text??'');if(cls)e.className=cls;return e};
 const btn=(text,cls,action)=>{const e=txt('button',text,'btn '+(cls||''));e.type='button';e.addEventListener('click',action);return e};
@@ -177,29 +209,80 @@ async function deleteConverted(){if(statusData.cleanup?.active||statusData.bulk_
  }catch(e){notify('Nettoyage : '+e.message,true)}
  finally{button.disabled=false;button.textContent='⌫ Supprimer les TS convertis';}
 }
+async function toggleFavorite(f){
+ try{
+  const desired=!f.favorite;
+  await post('/api/favorite',{path:f.path,favorite:desired});
+  notify(desired?'★ Ajouté aux favoris':'Retiré des favoris');
+  await refreshFiles();
+ }catch(e){notify('Favoris : '+e.message,true)}
+}
+async function deleteFile(f){
+ const description='Supprimer définitivement ce fichier du NAS ?\n\n'+f.name+'\n'+f.path+'\nTaille : '+byteSize(f.size)+'\n\nSeul ce fichier sera supprimé (pas son TS ou MP4 associé).\nCette action est irréversible.';
+ if(!confirm(description))return;
+ try{
+   await post('/api/file/delete',{path:f.path,confirmation:'SUPPRIMER '+f.path});
+   notify('Fichier supprimé : '+f.name+' · '+byteSize(f.size)+' libérés');
+   await Promise.all([refreshFiles(),refreshStatus()]);
+ }catch(e){notify('Suppression : '+e.message,true)}
+}
 async function startConversion(path){try{await post('/api/convert',{path});notify('Conversion ajoutée · suis la progression en haut de page');await refreshStatus()}catch(e){notify(e.message,true)}}
 async function convertAll(){if(statusData.bulk_conversion?.active||statusData.cleanup?.active)return;
  if(!confirm('Convertir tous les TS et .recovered.ts terminés de la bibliothèque ? Les fichiers historiques resteront intacts.'))return;
  try{await post('/api/convert/all',{});notify('Conversion générale lancée');await refreshStatus()}catch(e){notify(e.message,true)}}
 async function refreshStatus(){try{statusData=await get('/api/status');renderModels();$('statModels').textContent=(statusData.monitored||[]).length;$('statLive').textContent=(statusData.monitored||[]).filter(m=>m.info?.public).length;$('statRecording').textContent=(statusData.recordings||[]).length;const health=$('health');if(health){health.innerHTML='<span class="dot online"></span> Serveur opérationnel'}
- showBulkProgress();showCleanupProgress();$('quality').value=String(statusData.quality||0);const conv=statusData.conversion||{};$('conversion').textContent=(conv.active?'En cours : '+conv.active+'\n':'')+((conv.events||[]).slice(-5).reverse().map(e=>e.at+' · '+e.message).join('\n')||'Aucune conversion récente.');$('events').textContent=(statusData.events||[]).slice(-50).reverse().map(e=>e.at+' ['+e.kind+'] '+e.message).join('\n')||'Aucun événement.';
+ showBulkProgress();showCleanupProgress();$('quality').value=String(statusData.quality||0);renderDisk();const conv=statusData.conversion||{};$('conversion').textContent=(conv.active?'En cours : '+conv.active+'\n':'')+((conv.events||[]).slice(-5).reverse().map(e=>e.at+' · '+e.message).join('\n')||'Aucune conversion récente.');$('events').textContent=(statusData.events||[]).slice(-50).reverse().map(e=>e.at+' ['+e.kind+'] '+e.message).join('\n')||'Aucun événement.';
  }catch(e){notify('Connexion : '+e.message,true);const h=$('health');if(h)h.textContent='● Connexion impossible'}}
 async function refreshFiles(){try{libraryFiles=(await get('/api/files')).files||[];$('statFiles').textContent=libraryFiles.length;renderFiles()}catch(e){notify('Bibliothèque : '+e.message,true)}}
-function renderFiles(){const root=$('fileCards');root.replaceChildren();const q=$('fileFilter').value.trim().toLowerCase();const selected=libraryFiles.filter(f=>(f.name+' '+f.path).toLowerCase().includes(q));$('filesInfo').textContent=selected.length+' vidéo'+(selected.length>1?'s':'')+' affichée'+(selected.length>1?'s':'')+' sur '+libraryFiles.length;if(!selected.length){const item=document.createElement('div');item.className='empty';item.innerHTML='<strong>Aucune vidéo</strong>Les enregistrements terminés apparaîtront ici.';root.append(item);return}
- const frag=document.createDocumentFragment();for(const f of selected){const card=txt('article',undefined,'file-card');const cover=txt('div',undefined,'file-cover');const fallback=txt('span','▣','fallback');const img=document.createElement('img');img.loading='lazy';img.alt='Miniature de '+f.name;img.src='/thumbnail/'+mediaPath(f.path)+'?v='+encodeURIComponent(f.modified);img.onerror=()=>img.remove();cover.append(fallback,img,txt('span',f.type.toUpperCase(),'cover-badge'));
- const content=txt('div',undefined,'file-content');const name=txt('div',f.name,'file-name');name.title=f.name;const origin=f.source==='new'?'SPRECORDER v4':f.source==='history-v3'?'Historique v3':'Historique';const meta=txt('div',origin+' · '+byteSize(f.size)+'\n'+formatDate(f.modified),'file-meta');meta.style.whiteSpace='pre-line';const actions=txt('div',undefined,'file-actions');if(f.type==='mp4')actions.append(btn('▶ Lire','primary',()=>openVideo(f)));if(f.type==='ts'){
-  if(f.converted)actions.append(txt('span','✓ MP4 disponible','converted-tag'));
-  else {const control=btn('↻ Convertir en MP4','soft',()=>startConversion(f.path));
-   control.disabled=!!statusData.bulk_conversion?.active||!!statusData.cleanup?.active;
-   actions.append(control)}
-};content.append(name,meta,actions);card.append(cover,content);frag.append(card)}root.append(frag)
+function renderFiles(){
+ const root=$('fileCards');root.replaceChildren();
+ const q=$('fileFilter').value.trim().toLowerCase(),onlyFavorite=$('favoritesOnly').checked;
+ const selected=libraryFiles.filter(f=>(f.name+' '+f.path).toLowerCase().includes(q)&&(!onlyFavorite||f.favorite));
+ const favorites=libraryFiles.filter(f=>f.favorite).length;
+ $('favoritesCount').textContent='('+favorites+')';
+ $('filesInfo').textContent=selected.length+' vidéo'+(selected.length>1?'s':'')+' affichée'+(selected.length>1?'s':'')+' sur '+libraryFiles.length;
+ if(!selected.length){const item=document.createElement('div');item.className='empty';
+   item.innerHTML=onlyFavorite?'<strong>Aucun favori</strong>Clique sur ★ sur une vidéo pour la retrouver ici.':'<strong>Aucune vidéo</strong>Les enregistrements terminés apparaîtront ici.';
+   root.append(item);return}
+ const frag=document.createDocumentFragment();
+ for(const f of selected){
+   const card=txt('article',undefined,'file-card');
+   const cover=txt('div',undefined,'file-cover');const fallback=txt('span','▣','fallback');
+   const img=document.createElement('img');img.loading='lazy';img.alt='Miniature de '+f.name;
+   img.src='/thumbnail/'+mediaPath(f.path)+'?v='+encodeURIComponent(f.modified);img.onerror=()=>img.remove();
+   const star=btn(f.favorite?'★':'☆','favorite-star'+(f.favorite?' active':''),()=>toggleFavorite(f));
+   star.title=f.favorite?'Retirer des favoris':'Ajouter aux favoris';star.setAttribute('aria-label',star.title);
+   star.setAttribute('aria-pressed',String(!!f.favorite));
+   cover.append(fallback,img,txt('span',f.type.toUpperCase(),'cover-badge'),star);
+   const content=txt('div',undefined,'file-content');
+   const name=txt('div',f.name,'file-name');name.title=f.name;
+   const origin=f.source==='new'?'SPRECORDER v4':f.source==='history-v3'?'Historique v3':'Historique';
+   const meta=txt('div',origin+' · '+byteSize(f.size)+'\n'+formatDate(f.modified),'file-meta');meta.style.whiteSpace='pre-line';
+   const actions=txt('div',undefined,'file-actions');
+   if(f.type==='mp4')actions.append(btn('▶ Lire','primary',()=>openVideo(f)));
+   if(f.type==='ts'){
+     if(f.converted)actions.append(txt('span','✓ MP4 disponible','converted-tag'));
+     else{
+       const control=btn('↻ Convertir en MP4','soft',()=>startConversion(f.path));
+       control.disabled=!!statusData.bulk_conversion?.active||!!statusData.cleanup?.active;actions.append(control);
+     }
+   }
+   const footer=txt('div',undefined,'file-footer');
+   footer.append(txt('small',f.favorite?'★ Dans tes favoris':'Enregistrement'));
+   const remove=btn('⌫ Supprimer','red sm',()=>deleteFile(f));
+   remove.title='Supprimer définitivement ce fichier';
+   remove.disabled=f.deletable===false||!!statusData.bulk_conversion?.active||!!statusData.cleanup?.active;
+   if(f.deletable===false)remove.title='Montage historique en écriture absent du YAML TrueNAS';
+   footer.append(remove);content.append(name,meta,actions,footer);card.append(cover,content);frag.append(card);
+ }
+ root.append(frag);
 }
 function openVideo(f){const v=$('fileVideo');$('modalTitle').textContent=f.name;v.src='/media/'+mediaPath(f.path);$('videoModal').showModal();v.play().catch(()=>{})}
 function closeVideo(){const v=$('fileVideo');v.pause();v.removeAttribute('src');v.load();$('videoModal').close()}
 function switchTab(tab){currentTab=tab;for(const b of document.querySelectorAll('.tab'))b.classList.toggle('active',b.dataset.tab===tab);for(const s of document.querySelectorAll('.section'))s.classList.toggle('active',s.id==='tab-'+tab);
  const headings={models:['Mes modèles','Surveille tes modèles, prévisualise les directs et enregistre uniquement quand tu le décides.'],library:['Bibliothèque vidéo','Retrouve tes enregistrements, leurs miniatures et leur lecture.'],settings:['Réglages & diagnostic','Pilote la qualité vidéo, suis les conversions et consulte le journal.']};$('page-title').textContent=headings[tab][0];$('page-subtitle').textContent=headings[tab][1];if(tab!=='models')stopAllPreviews();if(tab==='library')refreshFiles()}
 $('addForm').addEventListener('submit',async e=>{e.preventDefault();const name=$('modelInput').value.trim();if(!name)return;const ok=await perform('/api/model/add',{model:name,auto:false},'Modèle ajouté · auto-record désactivé');if(ok)$('modelInput').value=''});
-$('modelFilter').addEventListener('input',renderModels);$('fileFilter').addEventListener('input',renderFiles);$('filesRefresh').onclick=refreshFiles;$('convertAll').onclick=convertAll;$('deleteConverted').onclick=deleteConverted;$('refresh').onclick=async()=>{await Promise.all([refreshStatus(),refreshFiles()]);notify('Liste actualisée')};$('saveQuality').onclick=()=>perform('/api/settings',{quality:Number($('quality').value)},'Qualité enregistrée');$('closeModal').onclick=closeVideo;$('videoModal').addEventListener('close',()=>{const v=$('fileVideo');v.pause();v.removeAttribute('src');v.load()});for(const tab of document.querySelectorAll('.tab'))tab.onclick=()=>switchTab(tab.dataset.tab);
+$('modelFilter').addEventListener('input',renderModels);$('fileFilter').addEventListener('input',renderFiles);$('favoritesOnly').addEventListener('change',renderFiles);$('filesRefresh').onclick=refreshFiles;$('convertAll').onclick=convertAll;$('deleteConverted').onclick=deleteConverted;$('refresh').onclick=async()=>{await Promise.all([refreshStatus(),refreshFiles()]);notify('Liste actualisée')};$('saveQuality').onclick=()=>perform('/api/settings',{quality:Number($('quality').value)},'Qualité enregistrée');$('closeModal').onclick=closeVideo;$('videoModal').addEventListener('close',()=>{const v=$('fileVideo');v.pause();v.removeAttribute('src');v.load()});for(const tab of document.querySelectorAll('.tab'))tab.onclick=()=>switchTab(tab.dataset.tab);
 refreshStatus();refreshFiles();setInterval(refreshStatus,5000);setInterval(()=>{if(currentTab==='library')refreshFiles()},30000);document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAllPreviews()});
 </script>
 </body></html>

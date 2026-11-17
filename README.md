@@ -1,8 +1,17 @@
-# SPRECORDER v4.3.0 — Nettoyage vérifié des TS convertis
+# SPRECORDER v4.4.0 — Gestion des vidéos, favoris et stockage
 
 SPRECORDER reste une **application indépendante**, avec **une seule interface sur le port 18083**. Les cartes de modèles, la prévisualisation HLS, l'enregistrement manuel/automatique, la bibliothèque et la conversion MP4 des versions précédentes sont conservés.
 
-## Nouvelle fonction : « Supprimer les TS convertis »
+## Nouveautés v4.4.0
+
+- **Suppression individuelle** : dans Bibliothèque, chaque carte MP4, `.ts`, `.recovered.ts` ou `.ts.recovered.ts` possède un bouton **« Supprimer »**. La suppression concerne uniquement le fichier choisi, pas son éventuelle vidéo convertie, et exige une confirmation explicite. La suppression est définitive, sans corbeille.
+- **Protection des captures** : blocage pendant une conversion ou un nettoyage groupé, refus des fichiers actifs/récents, fragments cachés et liens symboliques. Un fichier historique exige les montages d'écriture dédiés décrits ci-dessous, et la permission NAS correspondante.
+- **Favoris** : étoile ☆/★ sur chaque enregistrement, filtre **« Favoris uniquement »**, préférences persistantes dans `/mnt/services/SPRECORDER-v4/state/favorites.json`. Un `.ts` et son `.mp4` partagent leur favori ; les MP4 importés des anciens TS aussi.
+- **Stockage en temps réel** : panneau en haut de SPRECORDER, espace occupé/libre sur le volume des enregistrements v4, ainsi que l'espace restant des volumes historiques, actualisés toutes les 5 secondes via les données système du NAS. Cette mesure porte sur le système de fichiers vu par le conteneur ; elle peut différer des statistiques du pool ZFS si des quotas/réservations s'appliquent.
+
+**Cette mise à jour conserve les paramètres, les vidéos, le port `18083`, les cartes des modèles, les previews et le moteur d'enregistrement de la v4.3.**
+
+## Fonction conservée : « Supprimer les TS convertis »
 
 Dans **Bibliothèque**, le bouton rouge **« Supprimer les TS convertis »** :
 
@@ -17,14 +26,14 @@ Dans **Bibliothèque**, le bouton rouge **« Supprimer les TS convertis »** :
 
 ## Mise à jour TrueNAS (important)
 
-1. Remplacer le contenu du dépôt `https://github.com/SaliDES/SPRECORDER` par ce ZIP, **y compris `.github/workflows/build.yml`**. Le commit sur `main` publiera les tags `4.3.0` et `latest`.
+1. Remplacer le contenu du dépôt `https://github.com/SaliDES/SPRECORDER` par ce ZIP, **y compris `.github/workflows/build.yml`**. Le commit sur `main` publiera les tags `4.4.0` et `latest`.
 2. Vérifier la réussite de GitHub Actions et tester :
-   `sudo docker pull ghcr.io/salides/sprecorder:4.3.0`
-3. Dans **TrueNAS Apps**, **modifier l'application existante `sprecorder-v4`** et utiliser le **fichier `TRUENAS-APPS.yml` fourni dans le ZIP**. Il ne suffit pas de changer le tag de l'image : la suppression historique requiert deux **nouveaux montages dédiés** en écriture, et deux variables d'environnement.
+   `sudo docker pull ghcr.io/salides/sprecorder:4.4.0`
+3. Dans **TrueNAS Apps**, **modifier l'application existante `sprecorder` / `sprecorder-v4`** et utiliser le fichier `TRUENAS-APPS.yml` fourni dans le ZIP. Les montages d'écriture des anciens enregistrements sont inchangés depuis v4.3. Si tu utilisais déjà le YAML v4.3, seule l'image change. Ne crée pas une deuxième application avec le même `container_name` ou le même port.
 4. Les volumes `/history:ro` et `/history-v3:ro` de consultation/lecture **restent en lecture seule**. Les nouveaux volumes `/history-clean:rw` et `/history-v3-clean:rw` correspondent aux mêmes dossiers hôtes et ne sont utilisés que pour le nettoyage explicitement déclenché. Vérifier que les permissions de fichiers TrueNAS autorisent la suppression.
-5. Accéder à `http://IP-DU-NAS:18083` → **Bibliothèque** → **Supprimer les TS convertis**.
+5. Accéder à `http://IP-DU-NAS:18083` → **Bibliothèque**. Pour la suppression individuelle, utiliser « Supprimer » sur la carte. Pour les TS convertis, le bouton global reste disponible.
 
-### Volumes (identiques à v4.2, sauf les montages de nettoyage supplémentaires)
+### Volumes (inchangés depuis v4.3)
 
 - `/mnt/services/SPRECORDER-v4:/data` : configuration, nouveaux enregistrements et MP4 importés.
 - `/mnt/services/SPRECORDER/recordings:/history:ro` : lecture des anciens fichiers.
@@ -32,7 +41,7 @@ Dans **Bibliothèque**, le bouton rouge **« Supprimer les TS convertis »** :
 - `/mnt/services/SPRECORDER/recordings:/history-clean:rw` : **suppression confirmée** des anciens TS qui ont un MP4 validé.
 - `/mnt/services/SPRECORDER-v3/recordings:/history-v3-clean:rw` : idem pour la v3.
 
-**Sans les montages en écriture supplémentaires, les TS historiques ne seront pas supprimables**, par conception. Leur conversion et leur consultation restent possibles.
+**Sans les montages en écriture supplémentaires, les TS et MP4 historiques ne seront pas supprimables manuellement**, par conception. Leur conversion et leur consultation restent possibles.
 
 ## Garantie et limites
 
@@ -46,7 +55,7 @@ Les anciens enregistrements se convertissent toujours vers `/mnt/services/SPRECO
 python3 -m unittest discover -s tests -v
 ```
 
-Tests hors ligne : conversion réelle FFmpeg, TS classiques et récupérés, refus d'effacer sans MP4 ou si MP4 invalide/durée différente, montages historiques en écriture opt-in, confirmation API, interface et fonctions d'enregistrement antérieures. La capture sur un vrai live et le montage dans TrueNAS n'ont pas été exécutés dans cet environnement.
+Tests hors ligne : suppression manuelle TS/MP4, filtre favoris, persistance de `favorites.json`, protection fichiers actifs/symlinks et mesures d'espace disque. Les tests précédents incluent la conversion réelle FFmpeg, TS classiques et récupérés, refus d'effacer sans MP4 ou si MP4 invalide/durée différente, montages historiques en écriture opt-in, confirmation API, interface et fonctions d'enregistrement antérieures. La capture sur un vrai live et le montage dans TrueNAS n'ont pas été exécutés dans cet environnement.
 
 ## Licences
 

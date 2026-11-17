@@ -19,6 +19,7 @@ try:
     from .converter import Converter
     from .bulk_convert import BulkConversion
     from .cleanup import CleanupConverted
+    from .library_actions import LibraryActions
     from .thumbnail import Thumbnailer
     from .profile_images import ProfileImages
 except ImportError:
@@ -26,6 +27,7 @@ except ImportError:
     from converter import Converter
     from bulk_convert import BulkConversion
     from cleanup import CleanupConverted
+    from library_actions import LibraryActions
     from thumbnail import Thumbnailer
     from profile_images import ProfileImages
 
@@ -132,6 +134,8 @@ class Engine:
         }
         self.cleanup = CleanupConverted(self.bulk, STATE / "conversions", cleanup_mounts,
                                         gate=self.conversion_gate)
+        self.library_actions = LibraryActions(
+            self.bulk.roots, STATE, cleanup_mounts, gate=self.conversion_gate)
         self.thumbnails=Thumbnailer(STATE / "thumbnails")
         self.profile_images=ProfileImages(STATE / "avatars")
         self._load()
@@ -158,11 +162,13 @@ class Engine:
 
     def status(self):
         with self.lock:
-            return {"version":"4.3.0-independent","recordings":[j.snapshot() for j in self.jobs.values()],
+            return {"version":"4.4.0-independent","recordings":[j.snapshot() for j in self.jobs.values()],
                     "monitored":[{"model":k,"auto":v.get("auto",False),"info":self.infos.get(k)} for k,v in sorted(self.monitored.items())],
                     "quality":self.quality,"events":list(self.events)[-30:],
                     "conversion":self.converter.status(),"bulk_conversion":self.bulk.status(),
-                    "cleanup":self.cleanup.status()}
+                    "cleanup":self.cleanup.status(),
+                    "storage":self.library_actions.disk_stats(),
+                    "favorite_count":self.library_actions.count()}
 
     def add_model(self,model:str,auto:bool=False):
         model=safe_public_name(model)
@@ -422,10 +428,32 @@ class Engine:
                         key=source+"/"+str(rel)
                         out.append({"name":p.name,"path":key,"source":source,
                                     "converted": self.bulk.already_done(key) if p.suffix.lower()==".ts" else False,
-                                    "size":st.st_size,"modified":int(st.st_mtime),"type":p.suffix[1:]})
+                                    "size":st.st_size,"modified":int(st.st_mtime),"type":p.suffix[1:],
+                                    "favorite":self.library_actions.is_favorite(key),
+                                    "deletable":self.library_actions.can_delete(key)})
             except OSError as exc:
                 self.log("warning",f"Bibliothèque {source}: {exc}")
         return sorted(out,key=lambda x:x['modified'],reverse=True)
+
+    def set_favorite(self, relative: str, enabled: bool):
+        marked = self.library_actions.set_favorite(relative, enabled)
+        self.log("library", f"Favori {'ajouté' if marked else 'retiré'} : {relative}")
+        return marked
+
+    def delete_recording(self, relative: str, confirmation: str):
+        """One-file explicit deletion, under the shared FFmpeg processing gate."""
+        with self.lock:
+            active_models = set(self.jobs)
+        converting = self.converter.status().get("active")
+        result = self.library_actions.delete_one(
+            relative, confirmation,
+            busy=self.bulk.status()["active"] or self.cleanup.status()["active"],
+            active_models=active_models, converting=converting)
+        # Remove a favorite only when neither its TS nor its MP4 exists anymore.
+        self.library_actions.prune_favorite_if_orphaned(
+            relative, [entry["path"] for entry in self.list_files()])
+        self.log("library", f"Fichier supprimé : {relative} ({result['bytes']} octets)")
+        return result
 
     def file_path(self,relative:str):
         if relative.startswith("new/"): root=RECORDINGS.resolve(); rel=relative[4:]
