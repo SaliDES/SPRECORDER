@@ -162,7 +162,7 @@ class Engine:
 
     def status(self):
         with self.lock:
-            return {"version":"4.4.0-independent","recordings":[j.snapshot() for j in self.jobs.values()],
+            return {"version":"4.4.1-independent","recordings":[j.snapshot() for j in self.jobs.values()],
                     "monitored":[{"model":k,"auto":v.get("auto",False),"info":self.infos.get(k)} for k,v in sorted(self.monitored.items())],
                     "quality":self.quality,"events":list(self.events)[-30:],
                     "conversion":self.converter.status(),"bulk_conversion":self.bulk.status(),
