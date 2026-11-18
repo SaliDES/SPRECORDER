@@ -162,7 +162,7 @@ class Engine:
 
     def status(self):
         with self.lock:
-            return {"version":"4.4.1-independent","recordings":[j.snapshot() for j in self.jobs.values()],
+            return {"version":"4.4.2-independent","recordings":[j.snapshot() for j in self.jobs.values()],
                     "monitored":[{"model":k,"auto":v.get("auto",False),"info":self.infos.get(k)} for k,v in sorted(self.monitored.items())],
                     "quality":self.quality,"events":list(self.events)[-30:],
                     "conversion":self.converter.status(),"bulk_conversion":self.bulk.status(),
@@ -419,18 +419,36 @@ class Engine:
         for source,root in roots:
             root=root.resolve()
             try:
-                for ext in ("*.mp4","*.ts"):
+                for ext in ("*.mp4", "*.ts"):
                     for p in root.rglob(ext):
-                        if len(out)>=2000: break
-                        if p.is_symlink() or not p.is_file() or any(x.startswith('.') for x in p.relative_to(root).parts): continue
-                        rel=p.relative_to(root)
-                        st=p.stat()
-                        key=source+"/"+str(rel)
-                        out.append({"name":p.name,"path":key,"source":source,
-                                    "converted": self.bulk.already_done(key) if p.suffix.lower()==".ts" else False,
-                                    "size":st.st_size,"modified":int(st.st_mtime),"type":p.suffix[1:],
-                                    "favorite":self.library_actions.is_favorite(key),
-                                    "deletable":self.library_actions.can_delete(key)})
+                        if len(out) >= 2000:
+                            break
+                        try:
+                            if p.is_symlink() or not p.is_file():
+                                continue
+                            rel = p.relative_to(root)
+                            key = source + "/" + str(rel)
+                            # The library and manual-delete actions must agree on which
+                            # names are completed videos. FFmpeg .merging.ts, .part.ts,
+                            # hidden fragments and HLS chunk directories are not videos.
+                            # Previously can_delete() raised ValueError for these files,
+                            # aborting the entire /api/files request.
+                            try:
+                                self.library_actions._safe_key(key)
+                            except ValueError:
+                                continue
+                            if (p.parent / "playlist.m3u8").exists():
+                                continue
+                            st = p.stat()
+                            out.append({"name": p.name, "path": key, "source": source,
+                                        "converted": self.bulk.already_done(key) if p.suffix.lower() == ".ts" else False,
+                                        "size": st.st_size, "modified": int(st.st_mtime), "type": p.suffix[1:],
+                                        "favorite": self.library_actions.is_favorite(key),
+                                        "deletable": self.library_actions.can_delete(key)})
+                        except OSError:
+                            # A conversion may move/remove a file during scanning;
+                            # never make one vanished file hide the whole library.
+                            continue
             except OSError as exc:
                 self.log("warning",f"Bibliothèque {source}: {exc}")
         return sorted(out,key=lambda x:x['modified'],reverse=True)

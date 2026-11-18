@@ -1,25 +1,27 @@
-# SPRECORDER 4.4.1 — correctif du plantage Python SSL
+# SPRECORDER 4.4.2 — correctif du chargement de la bibliothèque
 
-La version 4.4.0 échouait à `import _ssl` avec `UnicodeDecodeError`, avant le lancement du serveur. Cette version utilise une installation Python 3.11 / OpenSSL issue de la même distribution Debian Bookworm. Le Dockerfile teste l'import SSL pendant la construction et GitHub Actions vérifie `import ssl` et le point `/health` **avant publication**.
+La v4.4.1 pouvait renvoyer l'erreur « Bibliothèque : Seuls les fichiers vidéo terminés sont autorisés » à l'ouverture de l'onglet Bibliothèque. Le scanner incluait des fichiers de travail FFmpeg (`*.merging.ts`, `*.part.ts`, fragments HLS), puis leur validation en tant que vidéos terminées provoquait une exception qui interrompait tout l'appel `/api/files`.
 
-Les fonctionnalités v4.4 (favoris, suppression individuelle, stockage en temps réel) sont conservées, et les volumes et le port 18083 sont inchangés.
+**Correctif :** le scanner filtre individuellement les fichiers via la même politique de noms que les actions de bibliothèque, ignore les sessions HLS et tolère les fichiers déplacés pendant une conversion. Les vrais `.ts`, `.recovered.ts`, `.ts.recovered.ts` et `.mp4` restent visibles. Les favoris, la suppression individuelle, la conversion automatique et l'affichage du stockage ne changent pas. **Aucun fichier n'est supprimé par cette mise à jour.**
 
-**Limite :** la nouvelle image n'a pas été construite dans l'environnement de préparation. Son fonctionnement réel doit être validé par la tâche GitHub Actions et par un lancement sur TrueNAS. En cas d'échec de construction, conserver ou réinstaller temporairement v4.3.0 sans supprimer les données.
+La protection SSL introduite en v4.4.1 reste présente (Python et OpenSSL Debian Bookworm) et GitHub Actions teste désormais la suite Python dans l'image Docker avant publication, en plus du démarrage SSL et HTTP.
+
+**Limite :** la construction Docker et le lancement réel sur TrueNAS restent à confirmer par GitHub Actions et l'installation sur le NAS ; les tests locaux ne remplacent pas cette vérification.
 
 ## Installation
 
 1. Publier le contenu complet du ZIP sur la branche `main`, y compris `.github/workflows/build.yml`.
 2. Vérifier que GitHub Actions termine les tests SSL et `/health` avec succès.
-3. Dans TrueNAS : `sudo docker pull ghcr.io/salides/sprecorder:4.4.1`.
+3. Dans TrueNAS : `sudo docker pull ghcr.io/salides/sprecorder:4.4.2`.
 4. Modifier seulement le tag de l'image dans le YAML de l'application existante.
 
 ---
 
-# SPRECORDER v4.4.1 — Gestion des vidéos, favoris et stockage
+# SPRECORDER v4.4.2 — Gestion des vidéos, favoris et stockage
 
 SPRECORDER reste une **application indépendante**, avec **une seule interface sur le port 18083**. Les cartes de modèles, la prévisualisation HLS, l'enregistrement manuel/automatique, la bibliothèque et la conversion MP4 des versions précédentes sont conservés.
 
-## Nouveautés v4.4.1
+## Nouveautés v4.4.2
 
 - **Suppression individuelle** : dans Bibliothèque, chaque carte MP4, `.ts`, `.recovered.ts` ou `.ts.recovered.ts` possède un bouton **« Supprimer »**. La suppression concerne uniquement le fichier choisi, pas son éventuelle vidéo convertie, et exige une confirmation explicite. La suppression est définitive, sans corbeille.
 - **Protection des captures** : blocage pendant une conversion ou un nettoyage groupé, refus des fichiers actifs/récents, fragments cachés et liens symboliques. Un fichier historique exige les montages d'écriture dédiés décrits ci-dessous, et la permission NAS correspondante.
@@ -43,9 +45,9 @@ Dans **Bibliothèque**, le bouton rouge **« Supprimer les TS convertis »** :
 
 ## Mise à jour TrueNAS (important)
 
-1. Remplacer le contenu du dépôt `https://github.com/SaliDES/SPRECORDER` par ce ZIP, **y compris `.github/workflows/build.yml`**. Le commit sur `main` publiera les tags `4.4.1` et `latest`.
+1. Remplacer le contenu du dépôt `https://github.com/SaliDES/SPRECORDER` par ce ZIP, **y compris `.github/workflows/build.yml`**. Le commit sur `main` publiera les tags `4.4.2` et `latest`.
 2. Vérifier la réussite de GitHub Actions et tester :
-   `sudo docker pull ghcr.io/salides/sprecorder:4.4.1`
+   `sudo docker pull ghcr.io/salides/sprecorder:4.4.2`
 3. Dans **TrueNAS Apps**, **modifier l'application existante `sprecorder` / `sprecorder-v4`** et utiliser le fichier `TRUENAS-APPS.yml` fourni dans le ZIP. Les montages d'écriture des anciens enregistrements sont inchangés depuis v4.3. Si tu utilisais déjà le YAML v4.3, seule l'image change. Ne crée pas une deuxième application avec le même `container_name` ou le même port.
 4. Les volumes `/history:ro` et `/history-v3:ro` de consultation/lecture **restent en lecture seule**. Les nouveaux volumes `/history-clean:rw` et `/history-v3-clean:rw` correspondent aux mêmes dossiers hôtes et ne sont utilisés que pour le nettoyage explicitement déclenché. Vérifier que les permissions de fichiers TrueNAS autorisent la suppression.
 5. Accéder à `http://IP-DU-NAS:18083` → **Bibliothèque**. Pour la suppression individuelle, utiliser « Supprimer » sur la carte. Pour les TS convertis, le bouton global reste disponible.

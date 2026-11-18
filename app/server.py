@@ -27,7 +27,7 @@ class API(BaseHTTPRequestHandler):
     engine:Engine
     tokens:dict[str,tuple[float,str]]={}
     token_lock=threading.Lock()
-    server_version="SPRECORDER/4.4"
+    server_version="SPRECORDER/4.4.2"
 
     def log_message(self,fmt,*args):
         LOG.info("%s %s",self.address_string(),fmt%args)
@@ -52,7 +52,7 @@ class API(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlsplit(self.path).path
         try:
-            if path=="/health": return self.respond({"ok":True,"version":"4.4.1-independent"})
+            if path=="/health": return self.respond({"ok":True,"version":"4.4.2-independent"})
             if path=="/api/status": return self.respond(self.engine.status())
             if path=="/api/files": return self.respond({"files":self.engine.list_files()})
             if path=="/api/storage": return self.respond({"storage":self.engine.library_actions.disk_stats()})
